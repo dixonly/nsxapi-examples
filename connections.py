@@ -69,6 +69,9 @@ class NsxConnect(requests.Request):
                 self.requestAttr['headers']['Authorization'] = 'Remote %s' % base64.b64encode('%s:%s' %(self.username, self.password))
 
     def __checkReturnCode(self, result, codes):
+        '''
+        Checks HTTP requests result.status_code against a list of accepted codes
+        '''
         if codes:
             if result.status_code not in codes:
                 raise ValueError("Return code '%d' not in list of expected codes: %s\n %s"
@@ -83,6 +86,7 @@ class NsxConnect(requests.Request):
         trial - if True, will not execute the specified called.
                 combine with verbose=true to see what'll be submitted
                 NSX
+        codes - List of HTTP request status codes for success
         '''
 
         url = self.server+api
@@ -141,6 +145,7 @@ class NsxConnect(requests.Request):
         trial - if True, will not execute the specified called.
                 combine with verbose=true to see what'll be submitted
                 NSX
+        codes - List of HTTP request status codes for success
         '''
         url=self.server+api
         if verbose:
@@ -161,6 +166,13 @@ class NsxConnect(requests.Request):
             return None
 
     def delete(self, api, verbose=True,trial=False,codes=None):
+        '''
+        REST API delete requests
+        api - REST API, this will be appended to self.server
+        verbose - if True, will print info about API and result
+        trial - if true, will not execute the request
+        codes - List of HTTP request status codes for success
+        '''
         url = self.server+api
         if verbose:
             print("API: DELETE %s" %url)
@@ -185,6 +197,7 @@ class NsxConnect(requests.Request):
         trial - if True, will not execute the specified called.
                 combine with verbose=true to see what'll be submitted
                 NSX
+        codes - List of HTTP request status codes for success
         '''
         url = self.server+api
         if verbose:
@@ -233,23 +246,5 @@ class NsxConnect(requests.Request):
                              if k.lower() in ['set-cookie',
                                               'x-xsrf-token', 'date']}))
 
-if __name__ == '__main__':
-    #nsx=NsxConnect('10.172.165.165', verify=False, user='sfadmin@ad.cptroot.com', password='Vmware123!')
-    nsx=NsxConnect('10.172.165.165', verify=False, user='admin', password='CptWare12345!')
-    nsx.createSessionCookie(filename="abc.txt")
-    nsx=NsxConnect('10.172.165.165', verify=False, cookie='abc.txt')
-    
-    r,h = nsx.get(api='/api/v1/logical-routers')
-    if r:
-        print(r)
 
-    data={}
-    data['prefixes'] = [{'action': 'PERMIT', 'network': "ANY"}]
-    data['display_name'] = 'test_prefix4'
-
-    r = nsx.patch(api='/policy/api/v1/infra/tier-0s/t0_1/prefix-lists/test_prefix4', data=json.dumps(data),verbose=True,trial=False)
-
-
-    if r:
-        print(r)
 

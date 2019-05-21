@@ -1,0 +1,91 @@
+connections.py – provides NsxConnect class to manage connections and invoke REST API
+nsxobjects.py – provides classes to configure NSX resources
+nsxt.py  - Implements CLI using nsxobjects.py to configure NSX
+clone.py – Implements a CLI to clone VMs through vSphere and connect to NSX networks
+tasks.py – Copy of public domain code to manage vSphere API tasks (used by clone.py)
+
+
+connections.py:
+class NsxConnect():
+   __init__(server, port=443,user=‘admin’, password,cookie,cert,verify,timeout)
+   get(api,verbose,trial,codes)
+       ==>GET API Request
+   patch(api,data,verbose,trial,codes)
+       ==> PATCH API request
+   put(api,data,verbose,trial,codes)
+       ==> PUT API request
+   delete(api,data,verbose,trial,codes)
+       ==> DELETE API request
+   post(api,data,verbose,trial,codes)
+       ==> POST API request
+   createSessionCookie(filename)
+       ==> Retrieves session cookie and stores in filename
+
+
+Parameters:
+api – the complete API URL (without hostname) of the REST API call
+data – python dictionary of data to be submitted to NSX by REST API
+verbose – Boolean to indicate whether REST API will output extra info 
+trial – If True, will not submit API to server.  Combine with verbose==True to see composed data to be submitted
+codes – List of HTTP response codes consider to be successful by the API request
+
+
+
+nsxobjects.py:
+class Nsx_object():
+   __init__(mp,listApi)
+   self.mp = mp
+   self.listApi = listApi
+ 
+   list(api,display)  - api defaults to self.listApi 
+   findByName(name,api,data,display) – iterates through list() or data to find object by name
+   findById(id,api,data,display) – iterates through list() or data to find object by id
+   getPathByName(name,api,data,display) – iterates through list() or data to find and retrieve object path by name
+   getPathById(id,api,data,display) - iterates through list() or data to find and retrieve object path by id
+   getRealizationEntities(name,path,display) – get realization entities for object by name or path
+   getRealizationStatus(name,path,display) – get realization status for object by name or path
+   getPathByTypeAndName(name, types, display) – iterate through possible Nsx_object types to find object by name
+   delete(name) – Deletes an Nsx_object by name
+
+Parameters:
+mp – NsxConnect object
+listApi – API for GET request for a specific resource instance type
+display – if true, print found data.  Data is always returned
+
+  
+   
+
+nsxt.py:
+Implements CLI using Nsx_object to configure and manage NSX-T
+
+Example: to create a segment
+>./nsxt.py  --cookie session.txt 10.172.165.163   segment config --help
+usage: nsxt.py nsxmgr segment config [-h] --name NAME --tz TZ [--lr LR]
+                                     [--gw GW] [--dhcp DHCP]
+                                     [--vlans [VLANS [VLANS ...]]]
+                                     [--desc DESC]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --name NAME
+  --tz TZ               Name of TZ
+  --lr LR               Logical router to connect to, default none
+  --gw GW               CIDR of gateway, means LR interface IP
+  --dhcp DHCP           DHCP range
+  --vlans [VLANS [VLANS ...]]
+                        List of vlans
+  --desc DESC
+
+>./nsxt.py --cookie session.txt 10.172.165.152  segment config --name Demo-74.10.1.0 --tz TZ-OVERLAY --lr DemoT1 --gw 74.10.1.254/24
+API: PATCH https://10.172.165.152:443/policy/api/v1/infra/segments/Demo-74.10.1.0 with data:
+{
+    "transport_zone_path": "/infra/sites/default/enforcement-points/default/transport-zones/d2bc539e-60e7-4751-a215-30e48e50f72a",
+    "connectivity_path": "/infra/tier-1s/DemoT1",
+    "display_name": "Demo-74.10.1.0",
+    "subnets": [
+        {
+            "gateway_address": "74.10.1.254/24"
+        }
+    ]
+}
+

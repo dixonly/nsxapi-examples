@@ -5,6 +5,9 @@ import json
 
 
 class Nsx_object(object):
+    '''
+    Base class for all NSX resources
+    '''
     def __init__(self, mp, listApi=None,
                  domain='default',
                  site='default',
@@ -41,6 +44,9 @@ class Nsx_object(object):
                 cursor=r['cursor']
                 
     def jsonPrint(self, data, header=None, indent=4, brief=False):
+        '''
+        Takes dictionary and print output to stdout
+        '''
         if data and not isinstance(data,dict):
             print("Data not a valid dictionary")
             return
@@ -60,6 +66,10 @@ class Nsx_object(object):
 
                     
     def list(self, api=None, brief=False, display=True, header=None):
+        '''
+        Returns of a list of NSX objects with api.  The return result will combine
+        multipage results into one
+        '''
         if not api:
             if self.listApi:
                 api = self.listApi
@@ -71,7 +81,10 @@ class Nsx_object(object):
             self.jsonPrint(data=r, brief=brief, header=header)
         return r
         
-    def findByName(self, name, api=None, data=None, display=True,brief=False):     
+    def findByName(self, name, api=None, data=None, display=True,brief=False):
+        '''
+        Find an nsxobject by display_name
+        '''
         if not data:
             if not api:
                 if self.listApi:
@@ -96,6 +109,9 @@ class Nsx_object(object):
         return obj
     
     def findById(self, id, api=None, data=None, display=True,brief=False):
+        '''
+        Find an nsxobject by id
+        '''
         if not data:
             if not api:
                 if self.listApi:
@@ -119,11 +135,17 @@ class Nsx_object(object):
         return obj
 
     def getIdByName(self, name, api=None,data=None,display=True):
+        '''
+        Return the ID of an object found by display_name
+        '''
         r = self.findByName(name=name, api=api,data=data,display=False)
         if r:
             return r['id']
         
     def getPathByName(self, name, api=None, data=None, display=True):
+        '''
+        Return the Policy Path of an object found by display_name
+        '''
         if not api:
             api=self.listApi
 
@@ -136,6 +158,9 @@ class Nsx_object(object):
         return None
 
     def getPathById(self, id, api=None, data=None, display=True):
+        '''
+        Return the Policy path of an object found by id
+        '''
         if not api:
             api=self.listApi
 
@@ -147,6 +172,9 @@ class Nsx_object(object):
         return None
 
     def delete(self, name, display=True):
+        '''
+        Delete an nsxojbect found by display_name
+        '''
         oPath=self.getPathByName(name=name, display=False)
         if not oPath:
             print("%s not found for delete" % name)
@@ -155,6 +183,9 @@ class Nsx_object(object):
         self.mp.delete(api=api,verbose=True, codes=[200])
             
     def getRealizationEntities(self, name=None,path=None,display=True):
+        '''
+        Display/return the list of realized entities for a Policy object
+        '''
         if not path and not name:
             print("Must either supply entity path or name to get realization status")
             return None
@@ -173,6 +204,9 @@ class Nsx_object(object):
         return r
 
     def getRealizationStatus(self, name=None, path=None,display=True):
+        '''
+        Display/return the realization state of a Policy object
+        '''
         if not path and not name:
             print("Must either supply entity path or name to get realization status")
             return None
@@ -192,6 +226,8 @@ class Nsx_object(object):
 
     def getPathByTypeAndName(self, name, types, display=True):
         '''
+        Return the Policy path of an object found by display_name, iterating
+           through a list ob nsxobject types for the search
         name = name of the object
         types = list of types to search through
         '''
@@ -207,7 +243,7 @@ class Nsx_object(object):
 
 class Cluster(Nsx_object):
     '''
-    This overwrites the same cluster class in nsxtlib.py
+    NSX Manager cluster
     '''
     
     def __init__(self, mp):
@@ -306,6 +342,9 @@ class Cluster(Nsx_object):
 
 
 class GlobalConfigs(Nsx_object):
+    '''
+    Class for switch and routing GlobalConfigs
+    '''
     def __init__(self,mp):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi='/api/v1/global-configs'
@@ -361,27 +400,43 @@ class GlobalConfigs(Nsx_object):
         
 
 class TransportZone(Nsx_object):
+    '''
+    Read only class to search TZs.  CRUD on TZ is done via MP API
+    '''
     def __init__(self,mp):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi=('/policy/api/v1/infra/sites/%s/enforcement-points/%s/transport-zones'
                       %(self.site, self.ep))
-class EnforcementPoints(Nsx_object):    
+class EnforcementPoints(Nsx_object):
+    '''
+    Read only class to search enforcement points.  There's currently only
+    one enforcement point called 'default' per NSX deployment
+    '''
     def __init__(self,mp):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi='/policy/api/v1/infra/sites/%s/enforcement-points' %self.site
 
-class Sites(Nsx_object):    
+class Sites(Nsx_object):
+    '''
+    Read only class to search sites.  For 2.4, use only 'default'
+    '''
     def __init__(self,mp):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi='/policy/api/v1/infra/sites'
 
 class EdgeCluster(Nsx_object):
+    '''
+    Read only class to search Edge Clusters.  CRUD is via MP API
+    '''
     def __init__(self,mp):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi=('/policy/api/v1/infra/sites/%s/enforcement-points/%s/edge-clusters'
                       % (self.site, self.ep))
     
 class Edge(Nsx_object):
+    '''
+    Class to list/find edge nodes, within an edgecluster ec if specified
+    '''
     def __init__(self, mp, site='default', enforcementPoint='default', ec=None):
         super(self.__class__, self).__init__(mp=mp)
         
@@ -410,6 +465,9 @@ class Edge(Nsx_object):
             
         
 class Tier0(Nsx_object):
+    '''
+    Class to manage Tier0 Gateways
+    '''
     def __init__(self, mp, site='default'):
         super(self.__class__, self).__init__(mp=mp, site=site)
         self.listApi='/policy/api/v1/infra/tier-0s'
@@ -938,6 +996,9 @@ class RouteMap(Nsx_object):
             
         
 class Tier1(Nsx_object):
+    '''
+    Class to manage Tier1 Gateways
+    '''
     def __init__(self, mp, site='default'):
         super(self.__class__, self).__init__(mp=mp, site=site)
         self.listApi='/policy/api/v1/infra/tier-1s'
@@ -1034,6 +1095,9 @@ class Tier1(Nsx_object):
         sel.mp.patch(api=api,verbose=True,data=data)
         
 class Segments(Nsx_object):
+    '''
+    Class to manage Segments
+    '''
     def __init__(self, mp):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi='/policy/api/v1/infra/segments'
