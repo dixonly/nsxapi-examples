@@ -494,7 +494,9 @@ def parseParameters():
                        help="List of Policy groups by path")
     group.add_argument('--tags', default=None, nargs='*',
                        help="List of tags in format of scope/policy")
-                       
+    group=groupNs.add_parser('members')
+    group.add_argument('--name', required=True)
+    
     serviceSpace = subparsers.add_parser('service')
     serviceNs = serviceSpace.add_subparsers(dest='service')
     createCommonParsers(parser=serviceNs,
@@ -1335,7 +1337,7 @@ def createNsxObject(objName, mp, args):
     elif objName=='domain':
         return nsxobjects.Domain(mp=mp)
     elif objName=='group':
-        return nsxobjects.Group(mp=mp, domain=args.domain)
+        return nsxobjects.Group(mp=mp)
     elif objName=='service':
         return nsxobjects.Service(mp=mp)
     elif objName=='policy':
@@ -1642,7 +1644,8 @@ def main():
                        vifs=args.vif,
                        groups=args.nsgroups,
                        tags=args.tags)
-            
+        elif argsNs['group'] == 'members':
+            obj.getVmMembers(name=args.name)
     elif args.ns == 'policy':
         if argsNs['policy'] == 'config':
             obj.config(name=args.name,

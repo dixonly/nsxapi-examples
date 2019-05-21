@@ -1912,12 +1912,19 @@ class Group(Nsx_object):
         api='/policy/api/v1/infra/domains/%s/groups/%s' % (domain,name)
         self.mp.patch(api=api,data=nsgroup, verbose=True,codes=[200])
 
-    def getMembers(self, name, domai='default', mtype):
-        '''
-        mtype can be ipaddr, ports, switches, vms, tags
-        '''
-        
-
+    def getVmMembers(self, name, domain='default'):
+        path=self.getPathByName(name=name,display=False)
+        if not path:
+            print("Group %s not found" %name)
+            return None
+        E=EnforcementPoints(mp=self.mp)
+        epath=E.getPathByName(name='default', display=False)
+        api=('/policy/api/v1%s/members/virtual-machines?enforcement_point_path=%s'
+             %(path, epath))
+        r = self.mp.get(api=api,verbose=True,codes=[200])
+        print("VM members of group %s, count: %d:" %(name, r['result_count']))
+        for i in r['results']:
+            print("   %s" %i['display_name'])
         
         
 class Service(Nsx_object):
