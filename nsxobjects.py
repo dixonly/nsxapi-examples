@@ -549,7 +549,8 @@ class Tier0(Nsx_object):
         self.mp.patch(api=api, data=data, codes=[200], verbose=True)
             
 
-    def getInterfaces(self, name, locale='default', interface=None, display=True):
+    def getInterfaces(self, name, locale='default', interface=None,
+                      stats=False, node=None,display=True):
 
         t0=self.getPathByName(name=name, display=False)
         if not t0:
@@ -559,8 +560,25 @@ class Tier0(Nsx_object):
         api='/policy/api/v1' + t0 + '/locale-services/' + locale + '/interfaces'
         if interface:
             api=api + '/' + interface
+            if stats:
+                E=EnforcementPoints(mp=self.mp)
+                epath=E.getPathByName(name='default', display=False)
+                N=Edge(mp=self.mp)
+                elist=N.list(display=False)
+                en=None
+                for e in elist['results']:
+                    if e['display_name'] == node:
+                       en=e
+                       break
+                if not en:
+                    print("Edge %s not found for Tier0 %s" %(node, name))
+                    return None
+                api=(api+'/statistics?enforcement_point_path=%s&edge_path=%s'
+                     %(epath, en['path']))
 
         r = self.mp.get(api=api, verbose=display, codes=[200])
+        if display:
+            self.jsonPrint(r)
         return r
 
     def createInterface(self, name, interface, 
@@ -677,7 +695,8 @@ class Tier0(Nsx_object):
             return None
         
         api='/policy/api/v1' + t0 + '/locale-services/' + locale + '/bgp'
-        self.mp.get(api=api,verbose=display,codes=[200])
+        r = self.mp.get(api=api,verbose=display,codes=[200])
+        self.jsonPrint(r)
 
     def configBgp(self, name,
                   localas,
@@ -824,6 +843,65 @@ class Tier0(Nsx_object):
 
         self.delete(api=api, verbose=display)
 
+    def getLogicalRouterInfo(self, name, info='id'):
+        '''
+        Get the realized ID or api for the gateway
+        info can be 'id' or 'api'
+        '''
+        data=self.getRealizationEntities(name=name, display=False)
+        for d in data['results']:
+            if d['entity_type'] == 'RealizedLogicalRouter':
+                if info == 'id':
+                    return d['realization_specific_identifier']
+                elif info == 'api':
+                    return d['realization_api']
+                else:
+                    raise ValueError("Invalid info %s, must be id or api" %info)
+        return None
+                        
+    def getBgpNeighborStatus(self, name, display=True):
+        mpApi=self.getLogicalRouterInfo(name=name, info='api')
+        if not mpApi:
+            print("Invalid Tier0 Gateway or realization error: %s" %name)
+            return
+        api=mpApi+'/routing/bgp/neighbors/status?source=realtime'
+        r = self.mp.get(api=api,verbose=True)
+        if display:
+            self.jsonPrint(r)
+        return r
+
+    def getLrStatus(self, name, display=False):
+        mpApi=self.getLogicalRouterInfo(name=name, info='api')
+        if not mpApi:
+            print("Invalid Tier0 Gateway or realization error: %s" %name)
+            return None
+        api=mpApi+'/status'
+        r = self.mp.get(api=api,verbose=False)
+        if display:
+            self.jsonPrint(r)
+        return r
+        
+    def getRouteTable(self, name, node=None, rtype='routing-table'):
+        '''
+        rtype can be 'routing-table' or 'forwarding-table'
+        '''
+        status = self.getLrStatus(name=name, display=False)
+        if not status:
+            print("Tier0 %s not found" %name)
+            return None
+        
+        mpApi=self.getLogicalRouterInfo(name=name, info='api')
+        if not mpApi:
+            print("Invalid Tier0 Gateway or realization error: %s" %name)
+            return None
+
+        for n in status['per_node_status']:
+            print("==>Output for Edge TN %s" %n['transport_node_id'])
+            api=mpApi+'/routing/'+rtype+'?transport_node_id=%s&source=realtime' %n['transport_node_id']
+            r = self.mp.get(api=api,verbose=False)
+            self.jsonPrint(r)
+            
+        
 class PrefixList(Nsx_object):
     def __init__(self, mp, tier0):
         super(self.__class__, self).__init__(mp=mp)

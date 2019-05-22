@@ -223,6 +223,14 @@ def parseParameters():
     t0Ns = t0Space.add_subparsers(dest='tier0')
     createCommonParsers(parser=t0Ns,
                         names=['list', 'find', 'path', 'realization', "delete"])
+    t0_parser = t0Ns.add_parser('routes')
+    t0_parser.add_argument('--name', required=True,
+                           help="Name of Tier0")
+    t0_parser = t0Ns.add_parser('fib')
+    t0_parser.add_argument('--name', required=True,
+                           help="Name of Tier0")
+    
+    
     t0_parser = t0Ns.add_parser('config')
     t0_parser.add_argument('--name', required=True,
                            help="Name or Policy ID of Tier0 to update or add")
@@ -278,6 +286,11 @@ def parseParameters():
     t0_int = t0_intNs.add_parser('status')
     t0_int.add_argument('--name', required=True)
     t0_int.add_argument('--int', required=True)
+    t0_int.add_argument('--locale', default='default')
+    t0_int = t0_intNs.add_parser('stats')
+    t0_int.add_argument('--name', required=True)
+    t0_int.add_argument('--int', required=True)
+    t0_int.add_argument('--node', required=True)
     t0_int.add_argument('--locale', default='default')
     t0_int = t0_intNs.add_parser('entities')
     t0_int.add_argument('--locale', default='default')
@@ -416,6 +429,9 @@ def parseParameters():
     
     t0_neighbor.add_argument('--peer', required=True,
                              help="Peer name")
+    t0_neighbor = t0_bgpNeighborNs.add_parser('status')
+    t0_neighbor.add_argument('--name', required=True,
+                             help="name of Tier0 router")
 
     t1Space = subparsers.add_parser('tier1')
     t1Ns = t1Space.add_subparsers(dest='tier1')
@@ -1476,7 +1492,10 @@ def main():
             obj.config(name=args.name, failover=args.failover,
                        ha=args.ha, transit=args.transit,
                        dhcprelay=args.dhcprelay, desc=args.desc)
-            
+        elif argsNs['tier0'] == 'routes':
+            obj.getRouteTable(name=args.name, rtype='routing-table')
+        elif argsNs['tier0'] == 'fib':
+            obj.getRouteTable(name=args.name, rtype='forwarding-table')
         elif argsNs['tier0'] == 'interface':
             if argsNs['t0intNs'] == 'get':
                 obj.getInterfaces(name=args.name, locale=args.locale,
@@ -1495,6 +1514,11 @@ def main():
                                       locale=args.locale, display=False)
                 if i:
                     obj.getRealizationStatus(path=i['path'], display=True)
+            elif argsNs['t0intNs'] == 'stats':
+                i = obj.getInterfaces(name=args.name, interface=args.int,
+                                      stats=True,locale=args.locale,
+                                      node=args.node, display=True)
+                    
             elif argsNs['t0intNs'] == 'entities':
                 i = obj.getInterfaces(name=args.name, interface=args.int,
                                       locale=args.locale, display=False)
@@ -1543,6 +1567,8 @@ def main():
                 elif argsNs['bgpNeighborNs'] == 'delete':
                     obj.deleteBgpNeighbor(name=args.name, locale=args.locale,
                                           neighborName=args.peer, display=True)
+                elif argsNs['bgpNeighborNs'] == 'status':
+                    obj.getBgpNeighborStatus(name=args.name, display=True)
                               
         '''
         '''
