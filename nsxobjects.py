@@ -294,7 +294,10 @@ class Cluster(Nsx_object):
         restUrl = '/api/v1/cluster/status'
         r = self.mp.get(api=restUrl)
         self.jsonPrint(r,indent=4)
-
+    def cbmStatus(self):
+        restUrl='/api/v1/cluster-manager/status'
+        r = self.mp.get(api=restUrl)
+        self.jsonPrint(r,indent=4)
     def getClusterIp(self):
         restUrl='/api/v1/cluster/api-virtual-ip'
         r=self.mp.get(api=restUrl)

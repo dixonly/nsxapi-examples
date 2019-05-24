@@ -39,6 +39,7 @@ def parseParameters():
     cluster_parser = clusterNs.add_parser('info')
     cluster_parser = clusterNs.add_parser('nodes')
     cluster_parser = clusterNs.add_parser('status')
+    cluster_parser = clusterNs.add_parser('groupstatus')
     cluster_parser = clusterNs.add_parser('health')
     cluster_parser = clusterNs.add_parser('join')
     cluster_parser.add_argument('--primary', required=True,
@@ -1428,6 +1429,8 @@ def main():
             obj.status()
         elif argsNs['cluster'] == 'health':
             obj.health()
+        elif argsNs['cluster'] == 'groupstatus':
+            obj.cbmStatus()
         elif argsNs['cluster'] == 'join':
             primary=nsxplib.PolicyNode(host=args.primary, rootpassword=args.npass,
                                 adminpassword=args.npass,
