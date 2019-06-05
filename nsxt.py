@@ -291,7 +291,6 @@ def parseParameters():
     t0_int = t0_intNs.add_parser('stats')
     t0_int.add_argument('--name', required=True)
     t0_int.add_argument('--int', required=True)
-    t0_int.add_argument('--node', required=True)
     t0_int.add_argument('--locale', default='default')
     t0_int = t0_intNs.add_parser('entities')
     t0_int.add_argument('--locale', default='default')
@@ -1520,7 +1519,7 @@ def main():
             elif argsNs['t0intNs'] == 'stats':
                 i = obj.getInterfaces(name=args.name, interface=args.int,
                                       stats=True,locale=args.locale,
-                                      node=args.node, display=True)
+                                      display=True)
                     
             elif argsNs['t0intNs'] == 'entities':
                 i = obj.getInterfaces(name=args.name, interface=args.int,

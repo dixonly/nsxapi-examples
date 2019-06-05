@@ -78,6 +78,7 @@ class Nsx_object(object):
                 return None
         r = self.__pageHandler(api=api)
         if display:
+            print("API: GET %s" % api)
             self.jsonPrint(data=r, brief=brief, header=header)
         return r
         
@@ -465,7 +466,12 @@ class Edge(Nsx_object):
             if display:
                 self.jsonPrint(edges)
             return edges
-            
+    def getNamefromPath(self, path, ec=None):
+        edges=self.list(ec=ec, display=False)
+        for e in edges['results']:
+            if e['path'] == path:
+                return e['display_name']
+
         
 class Tier0(Nsx_object):
     '''
@@ -551,6 +557,32 @@ class Tier0(Nsx_object):
                 
         self.mp.patch(api=api, data=data, codes=[200], verbose=True)
             
+    
+    def getAllInterfaceStats(self, t0, display=False):
+        interfaces = self.getInterfaces(name=t0, display=False)
+        
+        data={}
+        data['results'] = []
+        E = Edge(mp=self.mp)
+        for i in interfaces['results']:
+            d = self.getInterfaces(name=t0, interface=i['display_name'],
+                                   stats=True, display=False) 
+
+            output={}
+            output['interface'] = i
+            output['stats'] = d
+            data['results'].append(output)
+        if display:
+            self.jsonPrint(data)
+        return data
+
+    def getInterfaceByName(self, t0, name):
+        allInts = self.getInterfaces(name=t0, display=False)
+        for i in allInts['results']:
+           if i['display_name'] == name:
+               return i
+        return None
+
 
     def getInterfaces(self, name, locale='default', interface=None,
                       stats=False, node=None,display=True):
@@ -562,22 +594,17 @@ class Tier0(Nsx_object):
             
         api='/policy/api/v1' + t0 + '/locale-services/' + locale + '/interfaces'
         if interface:
-            api=api + '/' + interface
+            E=EnforcementPoints(mp=self.mp)
+            epath=E.getPathByName(name='default', display=False)
+            uplink = self.getInterfaceByName(t0=name, name=interface)
+            if not uplink:
+                print("Interface %s not found on T0 %s" %(interface, name))
+                return None
+            
+            api=api + '/' + uplink['relative_path']
             if stats:
-                E=EnforcementPoints(mp=self.mp)
-                epath=E.getPathByName(name='default', display=False)
-                N=Edge(mp=self.mp)
-                elist=N.list(display=False)
-                en=None
-                for e in elist['results']:
-                    if e['display_name'] == node:
-                       en=e
-                       break
-                if not en:
-                    print("Edge %s not found for Tier0 %s" %(node, name))
-                    return None
                 api=(api+'/statistics?enforcement_point_path=%s&edge_path=%s'
-                     %(epath, en['path']))
+                     %(epath, uplink['edge_path']))
 
         r = self.mp.get(api=api, verbose=display, codes=[200])
         if display:
