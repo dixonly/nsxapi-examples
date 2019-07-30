@@ -94,9 +94,7 @@ class Nsx_object(object):
                 print ("Calling list with no API specified")
                 return None
             data = self.list(api=api,display=False)
-
         obj = None
-
         for o in data['results']:
             if o['display_name'] == name:
                 obj = o
@@ -257,6 +255,25 @@ class Cluster(Nsx_object):
         r= self.mp.get(restUrl,verbose=False)
         if display: self.jsonPrint(r)
         return r
+    def getFqdnMode(self,display=False):
+        r =  self.mp.get(api='/api/v1/configs/management')
+        if display:
+            self.jsonPrint(r)
+        return r
+    
+    def setFqdnMode(self):
+        fmode=self.getFqdnMode(display=False)
+        fmode['publish_fqdns'] = True
+        self.mp.put(api='/api/v1/configs/management',
+                    data=fmode,
+                    verbose=True)
+
+    def unsetFqdnMode(self):
+        fmode=self.getFqdnMode(display=False)
+        fmode['publish_fqdns'] = False
+        self.mp.put(api='/api/v1/configs/management',
+                    data=fmode,
+                    verbose=True)
 
     def createCluster(self,primary,secondaries):
         primary.getThumbprint(refresh=True)
@@ -411,6 +428,19 @@ class TransportZone(Nsx_object):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi=('/policy/api/v1/infra/sites/%s/enforcement-points/%s/transport-zones'
                       %(self.site, self.ep))
+
+   
+    def config(self,name,hswname,transportType,desc='None'):
+        api='/api/v1/transport-zones'
+        data={}
+        data['display_name'] = name
+        if desc:
+            data['description'] = desc
+        data['host_switch_name'] = hswname
+        data['transport_type'] = transportType
+        self.mp.post(api, data=data,verbose=True, codes=[201])
+
+ 
 class EnforcementPoints(Nsx_object):
     '''
     Read only class to search enforcement points.  There's currently only
@@ -420,6 +450,21 @@ class EnforcementPoints(Nsx_object):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi='/policy/api/v1/infra/sites/%s/enforcement-points' %self.site
 
+    def fullSync(self, site='default', ep='default'):
+        ePath=self.getPathByName(name=ep, display=False)
+        if not ePath:
+            print("Enforcement point %s not found" % ep)
+            return False
+        api='/policy/api/v1' + ePath + '?action=full-sync'
+        self.mp.post(api=api, data=None,verbose=True, codes=[200])
+    def reload(self, site='default', ep='default'):
+        ePath=self.getPathByName(name=ep, display=False)
+        if not ePath:
+            print("Enforcement point %s not found" % ep)
+            return False
+        api='/policy/api/v1' + ePath + '?action=reload'
+        self.mp.post(api=api, data=None,verbose=True, codes=[200])
+        
 class Sites(Nsx_object):
     '''
     Read only class to search sites.  For 2.4, use only 'default'
@@ -447,7 +492,8 @@ class Edge(Nsx_object):
     def list(self, ec=None, display=True):
         if ec:
             E = EdgeCluster(mp=self.mp)
-            ecPath = E.getPathById(id=ec, display=False)
+            #print("edgecluster name is %s" %ec)
+            ecPath = E.getPathByName(name=ec, display=False)
             if not ecPath:
                 raise ValueError("EdgeCluster %s not vallid" %ec)
             api='/policy/api/v1%s/edge-nodes' % ecPath
@@ -459,7 +505,7 @@ class Edge(Nsx_object):
             ec = EdgeCluster(mp=self.mp)
             ecList = ec.list(display=False)
             for e in ecList['results']:
-                r = self.list(ec=e['id'],display=False)
+                r = self.list(ec=e['display_name'],display=False)
                 if r['result_count'] > 0:
                     edges['result_count']+=r['result_count']
                     edges['results']+=r['results']
@@ -735,6 +781,8 @@ class Tier0(Nsx_object):
                   disable_multipathrelax=False,
                   enable_intersr=False,
                   disable_intersr=False,
+                  disable_gr=False,
+                  enable_gr=False,
                   enable_ecmp=False,
                   disable_ecmp=False,
                   desc=None,
@@ -768,6 +816,10 @@ class Tier0(Nsx_object):
             data['ecmp'] = enable_ecmp
         if disable_ecmp:
             data['ecmp'] = disable_ecmp
+        if enable_gr:
+            data['graceful_restart'] = True
+        if disable_gr:
+            data['graceful_restart'] = False
         if desc:
             data['description'] = desc
         if routeagg:
@@ -823,6 +875,13 @@ class Tier0(Nsx_object):
                           disablebfd=False,
                           bfdInterval=None,
                           bfdMultiple=None,
+                          sourceIp=None,
+                          gr=None,
+                          ipv6=False,
+                          inPrefixList=None,
+                          inRouteMap=None,
+                          outPrefixList=None,
+                          outRouteMap=None,
                           locale='default', display=True):
 
         t0=self.getPathByName(name=name, display=False)
@@ -856,11 +915,62 @@ class Tier0(Nsx_object):
             if bfdMultiple:
                 bfdData['multiple'] = bfdMultiple
             data['bfd'] = bfdData
+
+        if sourceIp:
+            data['source_addresses'] = sourceIp
+        if gr:
+            # DISABLE, GR_AND_HELPER, HELPER_ONLY
+            if gr not in ['DISABLE', 'GR_AND_HELPER', 'HELPER_ONLY']:
+                print("Graceful Restart mode of %s not supported." %gr)
+                return
+            data['graceful_restart_mode'] = gr
+
+        routefilter = {}
+        if ipv6:
+            routefilter['address_family'] = 'IPV6'
+        else:
+            routefilter['address_family'] = 'IPV4'
+
+        data['route_filtering']=[routefilter]
+        pfx=PrefixList(mp=self.mp, tier0=None,t0Path=t0)
+        rmp=RouteMap(mp=self.mp, tier0=None,t0Path=t0)
+        if inPrefixList or inRouteMap:
+            routefilter['in_route_filters'] = []
+            for i in  (inPrefixList or []):
+                pfxPath=pfx.getPathByName(name=i,display=False)
+                if pfxPath:
+                    routefilter['in_route_filters'].append(pfxPath)
+                else:
+                    print("Invalid inbound prefixlist: %s" %i)
+                    return
+
+            for i in (inRouteMap or []):
+                rmPath=rmp.getPathByName(name=i,display=False)
+                if rmPath:
+                    routefilter['in_route_filters'].append(rmPath)
+                else:
+                    print("Invalid inbound routemap: %s" %i)
+                    return
+        if outPrefixList or outRouteMap:
+            routefilter['out_route_filters'] = []
+            for i in (outPrefixList or []):
+                pfxPath=pfx.getPathByName(name=i,display=False)
+                if pfxPath:
+                    routefilter['out_route_filters'].append(pfxPath)
+                else:
+                    print("Invalid outbound prefixlist: %s" %i)
+                    return
+            for i in (outRouteMap or []):
+                rmPath=rmp.getPathByName(name=i,display=False)
+                if rmPath:
+                    routefilter['out_route_filters'].append(rmPath)
+                else:
+                    print("Invalid outbound routemap: %s" %i)
+                    return
             
         data['resource_type'] = 'BgpNeighborConfig'
         
-        self.mp.patch(api=api,data=data,verbose=True, codes=[200])
-        
+        r = self.mp.patch(api=api,data=data,verbose=True, codes=[200])
 
 
     def deleteBgpNeighbor(self, name, neighborName, locale='default', display=True):
@@ -933,9 +1043,12 @@ class Tier0(Nsx_object):
             
         
 class PrefixList(Nsx_object):
-    def __init__(self, mp, tier0):
+    def __init__(self, mp, tier0, t0Path=None):
         super(self.__class__, self).__init__(mp=mp)
-        self.listApi='/policy/api/v1/infra/tier-0s/' + tier0 + '/prefix-lists'
+        if not t0Path:
+            self.listApi='/policy/api/v1/infra/tier-0s/' + tier0 + '/prefix-lists'
+        else:
+            self.listApi='/policy/api/v1' + t0Path + '/prefix-lists'
 
     def config(self, t0, name, prefix, desc=None,display=True):
         api='/policy/api/v1/infra/tier-0s/' + t0 + '/prefix-lists/' + name
@@ -949,15 +1062,15 @@ class PrefixList(Nsx_object):
         
         for p in prefix:
             '''
-            format CIDR:GE bits:LE bits:action
+            format CIDR,GE bits,LE bits:action
             action can be PERMIT, DENY
             GE and LE can be blank
             the CIDR could also be "ANY"
             '''
-            prefix = p.split(':')
+            prefix = p.split(',')
             pdata={}
             if len(prefix) != 4:
-                print("Prefix format: CIDR:GE:LE:<PERMIT,DENY>")
+                print("Prefix format: CIDR,GE,LE,<PERMIT,DENY>")
                 return None
 
             subnet = prefix[0].strip()
@@ -1037,9 +1150,13 @@ class BgpCommunity(Nsx_object):
         self.delete(api=api,verbose=display,codes=[200])
             
 class RouteMap(Nsx_object):
-    def __init__(self, mp, tier0):
+    def __init__(self, mp, tier0, t0Path):
         super(self.__class__, self).__init__(mp=mp)
-        self.listApi='/policy/api/v1/infra/tier-0s/' + tier0 + '/route-maps'
+        if not t0Path:
+            self.listApi='/policy/api/v1/infra/tier-0s/' + tier0 + '/route-maps'
+        else:
+            self.listApi='/policy/api/v1' + t0Path + '/route-maps'
+            
 
     def config(self, t0, name, community, prefix, desc=None,display=True):
         api='/policy/api/v1/infra/tier-0s/' + t0 + '/route-maps/' + name
@@ -1111,7 +1228,7 @@ class Tier1(Nsx_object):
         super(self.__class__, self).__init__(mp=mp, site=site)
         self.listApi='/policy/api/v1/infra/tier-1s'
 
-    def config(self, name, preempt="NON_PREEMPTIVE", tier0=None,
+    def config(self, name, preempt="NON_PREEMPTIVE", tier0=None, dhcprelay=None,
                advertisements=None):
         data={}
         data['display_name'] = name
@@ -1125,6 +1242,15 @@ class Tier1(Nsx_object):
             data['tier0_path']=t0Path
         if advertisements:
             data['route_advertisement_types'] = advertisements
+
+        if dhcprelay:
+            ds=DhcpRelay(mp=self.mp)
+            dhcp=ds.getPathByName(name=dhcprelay, display=False)
+            if not dhcp:
+                print("DHCP relay service %s not found." %dhcprelay)
+                return False
+            data['dhcp_config_paths'] = [dhcp]
+
         api='/policy/api/v1/infra/tier-1s/%s' %name
         self.mp.patch(api=api,data=data,verbose=True,codes=[200])
 
@@ -1201,6 +1327,10 @@ class Tier1(Nsx_object):
 
         api='/policy/api/v1%s/locale-services/%s/interfaces/%s' %(t1path,locale,intName)
         sel.mp.patch(api=api,verbose=True,data=data)
+
+    def getLocale(self,name,display=True):
+        url=self.listApi + "/" + name + "/locale-services"
+        self.list(api=url,display=display)
         
 class Segments(Nsx_object):
     '''
@@ -1233,15 +1363,20 @@ class Segments(Nsx_object):
 
         if vlans:
             data['vlan_ids'] = vlans
-        
-        if gw or dhcp:
-            subnet={}
-            if dhcp:
-                subnet['dhcp_ranges'] = dhcp
-            if gw:
-                subnet['gateway_address'] = gw
 
-            data['subnets'] = [subnet]
+        data['subnets'] = []
+        if gw or dhcp:
+            index = 0
+            if not dhcp:
+                dhcp=[]
+            for g in gw or []:
+                subnet={}
+                subnet['gateway_address'] = g
+                i = len(dhcp)-1
+                if i>=index:
+                    subnet['dhcp_ranges'] = [dhcp[index]]
+                index+=1
+                data['subnets'].append(subnet)
 
         if connectPath:
             p=self.getPathByTypeAndName(name=connectPath, types=[Tier0, Tier1],
@@ -1254,6 +1389,34 @@ class Segments(Nsx_object):
 
         self.mp.patch(api=api, data=data,verbose=True, codes=[200])
 
+class SegmentPort(Nsx_object):
+    def __init__(self, mp, segmentName=None, segmentPath=None):
+        super(self.__class__, self).__init__(mp=mp)
+        # name will only be used if path is not supplied
+        self.segmentPath=segmentPath
+        if not segmentPath:
+            if not segmentName:
+                raise ValueError("Cannot instantiate SegmentPort without segment Name or path")
+            S = Segments(mp=self.mp)
+            self.segmentPath = S.getPathByName(name=segmentName, display=False)
+            if not self.segmentPath:
+                raise ValueError("Cannot find segment %s" %segmentName)
+            self.listApi='/policy/api/v1'+ self.segmentPath+'/ports'
+
+    def config(self, name, vif=None, tagspec=None):
+        tags=None
+        if tagspec:
+            T = Tags(mp=self.mp)
+            tags=T.createFromSpec(spec=tagspec)
+
+        data={}
+        data['display_name'] = name
+        if vif:
+            data['attachment'] = {'id': vif}
+        if tags:
+            data['tags'] = tags
+        api=self.listApi + '/%s' % name.replace(' ', '_')
+        self.mp.patch(api=api,data=data,verbose=True,codes=[200])
         
         
 class IpPool(Nsx_object):
@@ -1261,7 +1424,30 @@ class IpPool(Nsx_object):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi='/policy/api/v1/infra/ip-pools'
 
-    
+    def config(self,name,cidr,ranges,rangeName,gateway,addrType=None):
+
+        print('addrType=%s' %addrType) 
+        api='/policy/api/v1/infra/ip-pools/%s' %name
+        data={}
+        data['display_name'] = name
+        self.mp.patch(api=api, data=data,verbose=True, codes=[200])        
+
+
+        if addrType=='range':
+            data={}
+            api='/policy/api/v1/infra/ip-pools/%s/ip-subnets/%s' %(name,rangeName)
+            data['display_name'] = rangeName
+            data['allocation_ranges']=[]
+            range_ips = ranges.split(':')
+            if len(range_ips) > 0:
+                for ip_range in range_ips:
+                    start,end = ip_range.split('-')
+                    data['allocation_ranges'].append({'start':start,'end':end})
+            data['cidr'] = cidr
+            data['gateway_ip'] = gateway
+            data['resource_type'] = 'IpAddressPoolStaticSubnet'
+            data['parent_path'] = '/infra/ip-pools/%s' %name
+            self.mp.patch(api=api, data=data,verbose=True, codes=[200])       
 
 class TNProfile(Nsx_object):
 
@@ -1744,6 +1930,12 @@ class DhcpRelay(Nsx_object):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi='/policy/api/v1/infra/dhcp-relay-configs'
 
+    def config(self, name, servers):
+        api=self.listApi+'/%s'%name
+        data={}
+        data['server_addresses'] = servers
+        r = self.mp.patch(api=api, data=data,verbose=True,codes=[200])
+        
 class Domain(Nsx_object):
     def __init__(self,mp):
         super(self.__class__, self).__init__(mp=mp)

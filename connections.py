@@ -103,6 +103,7 @@ class NsxConnect(requests.Request):
             if verbose:
                 print("API not called - in safe mode")
             return None
+
         return json.loads(r.text)
 
     def patch(self, api, data=None, verbose=True,trial=False, codes=None):
@@ -242,6 +243,7 @@ class NsxConnect(requests.Request):
             return
             
         fp = open(filename, 'w')
+
         fp.write(json.dumps({k:v for k,v in r.headers.items()
                              if k.lower() in ['set-cookie',
                                               'x-xsrf-token', 'date']}))

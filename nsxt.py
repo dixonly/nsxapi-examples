@@ -62,7 +62,14 @@ def parseParameters():
     cluster_certns_parser = cluster_certns.add_parser('clear')
     cluster_certns_parser.add_argument('--name', required=True,
                                             help="Name of certificate")
-
+    cluster_parser = clusterNs.add_parser('fqdn')
+    cluster_fqdnns = cluster_parser.add_subparsers(dest='fqdn')
+    fqdn = cluster_fqdnns.add_parser('get')
+    fqdn = cluster_fqdnns.add_parser('set')
+    fqdn = cluster_fqdnns.add_parser('unset')
+    
+    
+    
     globalSpace = subparsers.add_parser('global')
     globalNs = globalSpace.add_subparsers(dest='global')
     createCommonParsers(parser=globalNs,
@@ -89,7 +96,14 @@ def parseParameters():
                                choices=['IPV4_ONLY', 'IPV4_AND_IPV6', 'IPV4_ONLY'],
                                help='Set the MTU')
     
-
+    dhcpRelaySpace = subparsers.add_parser('dhcprelay')
+    dhcpRelayNs = dhcpRelaySpace.add_subparsers(dest='dhcprelay')
+    createCommonParsers(parser=dhcpRelayNs, names=['list', 'path'])
+    dhcprelay = dhcpRelayNs.add_parser('config')
+    dhcprelay.add_argument('--name', required=True,
+                           help="Name of the dhcprelay config")
+    dhcprelay.add_argument('--servers', required=True,nargs='+',
+                           help="List of dhcp rela servers")
     tnprofileSpace = subparsers.add_parser('tnprofile')
     tnprofileNs = tnprofileSpace.add_subparsers(dest='tnprofile')
     createCommonParsers(parser=tnprofileNs,
@@ -146,18 +160,55 @@ def parseParameters():
     enforceNs = enforceSpace.add_subparsers(dest='enforce')
     createCommonParsers(parser=enforceNs,
                         names=['list', 'find', 'path'])
+    enforce = enforceNs.add_parser('sync')
+    enforce.add_argument('--site', required=False,
+                         default='default',
+                         help="Site name.  Default is default")
+    enforce.add_argument('--name', required=False,
+                         default='default',
+                         help="Enforcement point name, default is default")
+    enforce = enforceNs.add_parser('reload')
+    enforce.add_argument('--site', required=False,
+                         default='default',
+                         help="Site name.  Default is default")
+    enforce.add_argument('--name', required=False,
+                         default='default',
+                         help="Enforcement point name, default is default")
     '''
     '''
     tzSpace = subparsers.add_parser('tz')
     tzNs = tzSpace.add_subparsers(dest='tz')
-    createCommonParsers(parser=enforceNs,
+    createCommonParsers(parser=tzNs,
                         names=['list', 'find', 'path'])
+    tz_parser = tzNs.add_parser('config')
+    tz_parser.add_argument('--name', required=True,
+                                help="Name for the transport-zone")
+    tz_parser.add_argument('--desc', default=None, 
+                                help="Description for the transport-zone")
+    tz_parser.add_argument('--hswname', required=True,
+                                help="N-VDS name for the transport-zone")
+    tz_parser.add_argument('--type', required=False,default='OVERLAY',
+                                help="Type for the transport-zone. [OVERLAY|VLAN] Default=OVERLAY")
     '''
     '''
     ippoolSpace = subparsers.add_parser('ippool')
     ippoolNs = ippoolSpace.add_subparsers(dest='ippool')
     createCommonParsers(parser=ippoolNs,
                         names=['list', 'find', 'path', 'realization'])
+    ipppool_parser = ippoolNs.add_parser('config')
+    ippoolCfgNs = ipppool_parser.add_subparsers(dest='ippoolcfgns')
+    ippoolCfgNs_RangeP = ippoolCfgNs.add_parser('range')
+    ippoolCfgNs_RangeP.add_argument('--name', required=True,
+                                help="Name of the ippool")
+    ippoolCfgNs_RangeP.add_argument('--rangeName', required=True,
+                                help="Name of the ippool range")
+    ippoolCfgNs_RangeP.add_argument('--ranges', required=True,
+                                help="Allocation ranges for ip pool ex: '10.1.1.1-10.1.1.20:10.1.1.30-10.1.1.50:10.1.1.100-10.1.1.250'")
+    ippoolCfgNs_RangeP.add_argument('--cidr', required=True,
+                                help="cidr for the ippool range ex: 10.1.1.0/24")
+    ippoolCfgNs_RangeP.add_argument('--gateway', required=True,
+                                help="gateway ip for the ippool range")     
+
     '''
     '''
     realizeSpace = subparsers.add_parser('realizealarms')
@@ -179,19 +230,34 @@ def parseParameters():
     seg_parser.add_argument('--tz', required=True,help="Name of TZ")
     seg_parser.add_argument('--lr', required=False, default=None,
                             help="Logical router to connect to, default none")
-    seg_parser.add_argument('--gw', required=False, default=None, 
+    seg_parser.add_argument('--gw', required=False, default=None, nargs='*',
                             help='CIDR of gateway, means LR interface IP')
-    seg_parser.add_argument('--dhcp', required=False, default=None, 
+    seg_parser.add_argument('--dhcp', required=False, default=None, nargs='*',
                             help="DHCP range")
     seg_parser.add_argument('--vlans', required=False, default=None, nargs='*', help="List of vlans")
     seg_parser.add_argument('--desc', required=False)
+    
+    port = segmentNs.add_parser('port')
+    port.add_argument('--name', required=True)
+    portNs = port.add_subparsers(dest='port')
+    createCommonParsers(parser=portNs,
+                        names=['list', 'find', 'path', 'realization', "delete"])
+    port_parser = portNs.add_parser('config')
+    port_parser.add_argument('--portname',
+                             required=True,
+                             help="Name of port")
+    port_parser.add_argument('--vif', default=None,
+                             help="Set the VIF ID")
+    port_parser.add_argument('--tags', default=None, nargs='*',
+                             help="Tags in format of scope:tag-value")
+                             
 
     pfxSpace = subparsers.add_parser('prefixlist')
     pfxNs = pfxSpace.add_subparsers(dest='prefixlist')
     createCommonParsers(parser=pfxNs,
                         names=['list', 'find', 'path', 'realization', "delete"],
                         arguments=['t0'])
-
+    
 
     pfx_parser = pfxNs.add_parser('config')
     pfx_parser.add_argument('--t0',
@@ -203,7 +269,7 @@ def parseParameters():
     pfx_parser.add_argument("--prefix",
                             required=True,
                             nargs="*",
-                            help="List of prefixes, format: CIDR:GE:LE:ACTION, \
+                            help="List of prefixes, format: CIDR,GE,LE,ACTION, \
                             GE and LE can be blank, ACTION must be PERMIT/DENY")
     pfx_parser.add_argument('--desc', default=None)
     
@@ -375,6 +441,11 @@ def parseParameters():
     t0_bgp.add_argument('--disable_ecmp',
                         action='store_true',
                         help="Disable BGP ECMP, takes precedence over enable")
+    t0_bgp.add_argument('--enable_gr', action='store_true',
+                        help="Enable GR")
+    t0_bgp.add_argument('--disable_gr', action='store_true',
+                        help="Disable GR")
+    
     
     t0_bgp = t0_bgpNs.add_parser('neighbor')
     t0_bgpNeighborNs = t0_bgp.add_subparsers(dest='bgpNeighborNs')
@@ -394,6 +465,8 @@ def parseParameters():
                              help="Peer name")
     t0_neighbor.add_argument('--address', required=True,
                              help="Neighbor IP address")
+    t0_neighbor.add_argument('--ipv6', action='store_true',
+                             help="Specify this to be IPv6 neigbor")
     t0_neighbor.add_argument('--remoteAs', required=True,
                              help="Neighbor AS number")
     t0_neighbor.add_argument('--holdtime', required=False,
@@ -402,7 +475,7 @@ def parseParameters():
     t0_neighbor.add_argument('--keepalive', required=False,
                              default=None,
                              help="BGP keepalive timer, default 60s")
-    t0_neighbor.add_argument('--password', required=False,
+    t0_neighbor.add_argument('--secret', required=False,
                              default=None,
                              help="Neighbor password, use empty value '' to clear")
     t0_neighbor.add_argument('--enablebfd', required=False,
@@ -417,10 +490,17 @@ def parseParameters():
     t0_neighbor.add_argument('--bfdmultiple', required=False,
                              default=None,
                              help="BFD Multiplier, default 3")
-    
+    t0_neighbor.add_argument('--inprefixlist', required=False,default=None,nargs='*',
+                             help="Inbound prefix list")
+    t0_neighbor.add_argument('--sourceip', required=False, default=None, nargs='*',
+                             help="Source IP address(s), by default all uplinks")
+    t0_neighbor.add_argument('--gr', required=False,
+                             choices=["DISABLE", "GR_AND_HELPER", "HELPER_ONLY"],
+                             help="Graceful restart mode, default is DISABLE")
     t0_neighbor.add_argument('--desc', required=False,
                              default=None,
                              help="Neighbor description")
+    
     t0_neighbor = t0_bgpNeighborNs.add_parser('delete')                            
     t0_neighbor.add_argument('--name', required=True,
                              help="name of Tier0 router")
@@ -453,6 +533,9 @@ def parseParameters():
                                     'TIER1_LB_VIP',
                                     'TIER1_LB_SNAT',
                                     'TIER1_DNS_FORWARDER_IP'])
+    t1_parser.add_argument('--dhcprelay', default=None,required=False,
+                           help="Name of dhcprelay config")
+
     t1_parser = t1Ns.add_parser('edgecluster')
     t1_parser.add_argument('--name', required=True,
                            help="Name of the Tier1")
@@ -463,7 +546,13 @@ def parseParameters():
                            help="List of edges from the cluster to use")
     t1_parser.add_argument('--locale', required=False,
                            default='default')
-    
+
+    t1_parser = t1Ns.add_parser('locale')
+    t1_localeNs = t1_parser.add_subparsers(dest='t1localens')
+    t1_localeP = t1_localeNs.add_parser('get')
+    t1_localeP.add_argument('--name', required=True,
+                            help="Name of the Tier1")
+ 
 
     domainSpace = subparsers.add_parser('domain')
     domainNs = domainSpace.add_subparsers(dest='domain')
@@ -1314,6 +1403,8 @@ def createNsxObject(objName, mp, args):
         return nsxobjects.TransportZone(mp=mp)
     elif objName=='segment':
         return nsxobjects.Segments(mp=mp)
+    elif objName=='port':
+        return nsxobjects.SegmentPort(mp=mp, segmentName=args.name)
     elif objName=='ippool':
         return nsxobjects.IpPool(mp=mp)
     elif objName=='tncollection':
@@ -1407,7 +1498,8 @@ def main():
                                                 'realization', 'delete',
                                                 'path', 'config']:
         obj=createNsxObject(objName=argsNs['lb'], mp=mp, args=args)
-            
+    elif args.ns == 'segment' and argsNs['segment'] == 'port':
+        obj = createNsxObject(objName=argsNs['segment'], mp=mp, args=args)
     if not obj:
         print("Object name %s not handled by createNsxObject()" %args.ns)
         return
@@ -1416,6 +1508,9 @@ def main():
                                               'realization', 'delete',
                                               'path', 'config']:
         commonHandlers(obj=obj, argsNs=args.ns, subNs=argsNs[argsNs['lb']], args=args)
+    elif args.ns == 'segment' and argsNs['segment'] == 'port':
+        commonHandlers(obj=obj, argsNs=args.ns, subNs=argsNs[argsNs['segment']], args=args)
+    
     else:
         commonHandlers(obj=obj, argsNs=args.ns, subNs=argsNs[args.ns], args=args)
         
@@ -1454,6 +1549,14 @@ def main():
                 obj.clearCertificate(certName=args.name)
             elif argsNs['clustercert'] == 'set':
                 obj.setCertificate(certName=args.name)
+        elif argsNs['cluster'] == 'fqdn':
+            if argsNs['fqdn'] == 'get':
+                obj.getFqdnMode(display=True)
+            elif argsNs['fqdn'] == 'set':
+                obj.setFqdnMode()
+            elif argsNs['fqdn'] == 'unset':
+                obj.unsetFqdnMode()
+                
                 
     elif args.ns == 'global':
         if argsNs['global'] == 'switch':
@@ -1464,6 +1567,12 @@ def main():
             obj.updateRoutingConfig(name=args.name, desc=args.desc,
                                     mtu=args.mtu,
                                     l3mode=args.l3mode)
+
+    elif args.ns == 'enforce':
+        if argsNs['enforce'] == 'sync':
+            obj.fullSync(site=args.site, ep=args.name)
+        elif argsNs['enforce'] == 'reload':
+            obj.reload(site=args.site, ep=args.name)
     elif args.ns == 'tnprofile':
         if argsNs['tnprofile'] == 'config':
             obj.config(name = args.name,
@@ -1534,6 +1643,7 @@ def main():
                 obj.setRouteDistribution(name=args.name, locale=args.locale,
                                          redist=args.types)
             elif argsNs['t0localens'] == 'edgecluster':
+                print("clustername: %s" %args.cluster)
                 obj.setEdgeCluster(name=args.name, locale=args.locale,
                                    clustername=args.cluster)
             elif argsNs['t0localens'] == 'preferredEdge':
@@ -1550,21 +1660,27 @@ def main():
                               disable_intersr=args.disable_intersr,
                               enable_ecmp=args.enable_ecmp,
                               disable_ecmp=args.disable_ecmp,
+                              enable_gr=args.enable_gr,
+                              disable_gr=args.disable_gr,
                               display=True)
             elif argsNs['bgpns'] == 'neighbor':
                 if argsNs['bgpNeighborNs'] == 'get':
                     obj.getBgpNeighbors(name=args.name, locale=args.locale,display=True)
                 elif argsNs['bgpNeighborNs'] == 'config':
                     obj.configBgpNeighbor(name=args.name, neighborAddr = args.address,
+                                          ipv6=args.ipv6,
                                           remoteAs=args.remoteAs, neighborName = args.peer,
                                           neighborDesc=args.desc, holdtime=args.holdtime,
                                           keepalive=args.keepalive,
-                                          password=args.password,
+                                          password=args.secret,
                                           locale=args.locale,
                                           enablebfd=args.enablebfd,
                                           disablebfd=args.disablebfd,
                                           bfdInterval=args.bfdinterval,
                                           bfdMultiple=args.bfdmultiple,
+                                          inPrefixList=args.inprefixlist,
+                                          gr=args.gr,
+                                          sourceIp=args.sourceip,
                                           display=True)
                 elif argsNs['bgpNeighborNs'] == 'delete':
                     obj.deleteBgpNeighbor(name=args.name, locale=args.locale,
@@ -1577,11 +1693,15 @@ def main():
     elif args.ns == 'tier1':
         if argsNs['tier1'] == 'config':
             obj.config(name=args.name, preempt=args.preempt, tier0=args.tier0,
-                       advertisements=args.advertisements)
+                       advertisements=args.advertisements, dhcprelay=args.dhcprelay)
         elif argsNs['tier1'] == 'edgecluster':
             obj.setEdgeCluster(name=args.name, clustername=args.cluster,
                                edges=args.preferredEdges,
                                locale=args.locale)
+        elif argsNs['tier1'] == 'locale':
+            if argsNs['t1localens'] == 'get':
+                obj.getLocale(name=args.name,display=True)
+
     elif args.ns == 'prefixlist':
         if argsNs['prefixlist'] == 'config':
             obj.config(t0=args.t0,
@@ -1601,8 +1721,11 @@ def main():
                        vlans=args.vlans,
                        desc=args.desc)
 
-        '''
-        '''
+        elif argsNs['segment'] == 'port':
+            if argsNs['port'] == 'config':
+                obj.config(name=args.portname,
+                           vif=args.vif,
+                           tagspec=args.tags)
 
     elif args.ns == 'cert':
         if argsNs['cert'] == 'import':
@@ -1614,6 +1737,32 @@ def main():
                        
         '''
         '''
+
+    elif args.ns == 'tz':
+        if argsNs['tz'] == 'config':
+            obj.config(name=args.name,
+                       desc=args.desc,
+                       hswname=args.hswname,
+                       transportType=args.type)
+
+        '''
+        '''
+
+    elif args.ns == 'ippool':
+        if argsNs['ippool'] == 'config':
+            if argsNs['ippoolcfgns'] == 'range':
+                obj.config(addrType='range',
+                                 name=args.name,
+                                 ranges=args.ranges,
+                                 rangeName=args.rangeName,
+                                 cidr=args.cidr,
+                                 gateway=args.gateway)
+            else:
+                obj.config(addrType=None,name=args.name)
+
+        '''
+        '''
+
 
     elif args.ns == 'realizealarms':
         if argsNs['realizealarms'] == 'cleanup':
@@ -1898,7 +2047,9 @@ def main():
                                            serverCA=args.clientCA,
                                            serverCRL=args.serverCRL,
                                            sslProfile=args.sslProfile)
-
+    elif args.ns == 'dhcprelay':
+        if argsNs['dhcprelay'] == 'config':
+            obj.config(name=args.name, servers=args.servers)
  
     
 if __name__=="__main__":
