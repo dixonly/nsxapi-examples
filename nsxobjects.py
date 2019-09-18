@@ -440,7 +440,12 @@ class TransportZone(Nsx_object):
         data['transport_type'] = transportType
         self.mp.post(api, data=data,verbose=True, codes=[201])
 
- 
+    def getTransportNodeStatusReport(self):
+        api='/api/v1/transport-zones/transport-node-status-report'
+        self.mp.setHeader('Accept', 'application/octet-stream')
+        r=self.mp.get(api=api)
+        self.print(r)
+        
 class EnforcementPoints(Nsx_object):
     '''
     Read only class to search enforcement points.  There's currently only
@@ -464,7 +469,7 @@ class EnforcementPoints(Nsx_object):
             return False
         api='/policy/api/v1' + ePath + '?action=reload'
         self.mp.post(api=api, data=None,verbose=True, codes=[200])
-        
+
 class Sites(Nsx_object):
     '''
     Read only class to search sites.  For 2.4, use only 'default'
@@ -1782,8 +1787,9 @@ class Realization(Nsx_object):
         r = self.mp.post(api=api, data=data, verbose=True)
         
     def systemList(self):
-        api='/policy/api/v1/search?query=(_exists_:status and !status.consolidated_status.consolidated_status:SUCCESS)'
+        api='/policy/api/v1/search?query=(_exists_:status AND !status.consolidated_status.consolidated_status:SUCCESS)'
         r = self.mp.get(api=api,verbose=True)
+        self.jsonPrint(r)
         
         
     

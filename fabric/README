@@ -1,0 +1,3 @@
+This is a tar of other scripts that includes NSX-T fabric automation using imperative APIs.  This is intended as workflow examples that I've discussed with various people.  Some of hte files here overlap with the upper directory...I have no intention of updating the files in the tar bundle going forward.  Please reach out directly if you need help with something specific.
+
+the nsxt/firestar subdirectory shows the scripts I have to setup my most basic NSX-T environment.  The demo stuff in the upper directly has more declarative examples on how to setup routing, DFW, LB

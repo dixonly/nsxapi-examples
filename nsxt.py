@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import pinit
 import getpass
 import json
 import argparse
