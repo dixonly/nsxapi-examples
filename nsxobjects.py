@@ -2108,90 +2108,91 @@ class Group(Nsx_object):
         nsgroup={}
         nsgroup['display_name'] = name
         nsgroup['expression'] = []
-        for e in expressions:
-            exps = e.split(',')
+        if expressions:
+            for e in expressions:
+                exps = e.split(',')
 
-            if len(exps) > 1:
-                nest={}
-                nest['resource_type'] = 'NestedExpression'
-                nest['expressions'] = []
-                nsgroup['expression'].append(nest)
-                addTo=nest['expressions']
-                nesting = True
-            else:
-                addTo=nsgroup['expression']
-                nesting = False
-                
-            for c in exps:
-                conditions=c.split(':')
-                if len(conditions) != 5:
-                    raise ValueError("Condition %s not in correct format" %c)
-
-                # Process conjunction.  If first element in nested expression
-                # or first expression, ignore it.  Nested conjunction must be AND
-                conjunction = conditions[0].strip().upper()
-                if conjunction not in ['', 'OR','AND']:
-                    raise ValueError("Conjunction not empty, AND, OR: %s" %c)
-                if nesting:
-                    if conjunction == 'OR' and len(addTo) != 0:
-                        raise ValueError("Nested conjunction must be AND: %s" %c)
-                    elif len(addTo) != 0:
-                        addTo.append(AND)
+                if len(exps) > 1:
+                    nest={}
+                    nest['resource_type'] = 'NestedExpression'
+                    nest['expressions'] = []
+                    nsgroup['expression'].append(nest)
+                    addTo=nest['expressions']
+                    nesting = True
                 else:
-                    if len(addTo) > 0 and conjunction in ['', 'OR']:
-                        addTo.append(OR)
-                    elif len(addTo) > 0 and conjunction == 'AND':
-                        addTo.append(AND)
+                    addTo=nsgroup['expression']
+                    nesting = False
 
-                currentExpr = {}
-                mtype=conditions[1].strip().lower()
-                if mtype == 'ipset':
-                    currentExpr['member_type'] = 'IPSet'
-                elif mtype == 'virtualmachine':
-                    currentExpr['member_type'] = 'VirtualMachine'
-                elif mtype == 'logicalport':
-                    currentExpr['member_type'] = 'LogicalPort'
-                elif mtype == 'logicalswitch':
-                    currentExpr['member_type'] = 'LogicalSwitch'
-                else:
-                    raise ValueError("Expression member type must be one of "
-                                     "IPSet, VirtualMachine, LogicalPort, "
-                                     "LogicalSwitch: %s" %c)
-                    
-                key = conditions[2].strip().lower()
-                if mtype in ['ipset', 'logicalport', 'logicalswitch']:
-                    if key != 'tag':
-                        raise ValueError("IPSet, LogicalPort and LogicalSwitch "
-                                         "matches only Tag: %s" %c)
+                for c in exps:
+                    conditions=c.split(':')
+                    if len(conditions) != 5:
+                        raise ValueError("Condition %s not in correct format" %c)
+
+                    # Process conjunction.  If first element in nested expression
+                    # or first expression, ignore it.  Nested conjunction must be AND
+                    conjunction = conditions[0].strip().upper()
+                    if conjunction not in ['', 'OR','AND']:
+                        raise ValueError("Conjunction not empty, AND, OR: %s" %c)
+                    if nesting:
+                        if conjunction == 'OR' and len(addTo) != 0:
+                            raise ValueError("Nested conjunction must be AND: %s" %c)
+                        elif len(addTo) != 0:
+                            addTo.append(AND)
                     else:
-                        currentExpr['key'] = 'Tag'
-                else:
-                    if key == 'tag':
-                        currentExpr['key'] = 'Tag'
-                    elif key == 'name':
-                        currentExpr['key'] = 'Name'
-                    elif key == 'osname':
-                        currentExpr['key'] = 'OSName'
-                    elif key == 'ComputerName':
-                        currentExpr['key'] = 'ComputerName'
+                        if len(addTo) > 0 and conjunction in ['', 'OR']:
+                            addTo.append(OR)
+                        elif len(addTo) > 0 and conjunction == 'AND':
+                            addTo.append(AND)
+
+                    currentExpr = {}
+                    mtype=conditions[1].strip().lower()
+                    if mtype == 'ipset':
+                        currentExpr['member_type'] = 'IPSet'
+                    elif mtype == 'virtualmachine':
+                        currentExpr['member_type'] = 'VirtualMachine'
+                    elif mtype == 'logicalport':
+                        currentExpr['member_type'] = 'LogicalPort'
+                    elif mtype == 'logicalswitch':
+                        currentExpr['member_type'] = 'LogicalSwitch'
                     else:
-                        raise ValueError("VirtualMachine must match on on "
-                                         "Tag, Name, OSName, "
-                                         "ComputerName: %s" %c)
-                
-                operator=conditions[3].strip().upper()
-                if operator not in ['EQUALS', 'CONTAINS', 'STARTSWITH',
-                               'ENDSWITH', 'NOTEQUALS']:
-                    raiseValueError("Expression operator must be one of \n"
-                                    "equals, contains, startswith, endswith, notequals")
-                    
-                    
-                else:
-                    currentExpr['operator'] = operator
-                    
-                currentExpr['value'] = conditions[4].strip()
-                currentExpr['resource_type'] = 'Condition'
-                addTo.append(currentExpr)
+                        raise ValueError("Expression member type must be one of "
+                                         "IPSet, VirtualMachine, LogicalPort, "
+                                         "LogicalSwitch: %s" %c)
+
+                    key = conditions[2].strip().lower()
+                    if mtype in ['ipset', 'logicalport', 'logicalswitch']:
+                        if key != 'tag':
+                            raise ValueError("IPSet, LogicalPort and LogicalSwitch "
+                                             "matches only Tag: %s" %c)
+                        else:
+                            currentExpr['key'] = 'Tag'
+                    else:
+                        if key == 'tag':
+                            currentExpr['key'] = 'Tag'
+                        elif key == 'name':
+                            currentExpr['key'] = 'Name'
+                        elif key == 'osname':
+                            currentExpr['key'] = 'OSName'
+                        elif key == 'ComputerName':
+                            currentExpr['key'] = 'ComputerName'
+                        else:
+                            raise ValueError("VirtualMachine must match on on "
+                                             "Tag, Name, OSName, "
+                                             "ComputerName: %s" %c)
+
+                    operator=conditions[3].strip().upper()
+                    if operator not in ['EQUALS', 'CONTAINS', 'STARTSWITH',
+                                   'ENDSWITH', 'NOTEQUALS']:
+                        raiseValueError("Expression operator must be one of \n"
+                                        "equals, contains, startswith, endswith, notequals")
+
+
+                    else:
+                        currentExpr['operator'] = operator
+
+                    currentExpr['value'] = conditions[4].strip()
+                    currentExpr['resource_type'] = 'Condition'
+                    addTo.append(currentExpr)
 
         if segments:
             self.__handleSegments(segments=segments, expr=nsgroup['expression'],
