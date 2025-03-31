@@ -5,22 +5,24 @@ import json
 import ssl
 import OpenSSL
 import re
-import vcenter
+from datetime import datetime
 
 class Nsx_object(object):
     '''
     Base class for all NSX resources
     '''
-    def __init__(self, mp, listApi=None,
+    def __init__(self, mp, listApi=None, detailApi=None,
                  domain='default',
                  site='default',
                  enforcementPoint='default'):
         self.mp=mp
         self.listApi = listApi
+        self.detailApi = detailApi
         # switch to mp values for these in GC
         self.domain=mp.domain
         self.site=mp.site
         self.ep=mp.enforcement
+        self.version=mp.version
             
     def __pageHandler(self, api):
         '''
@@ -29,7 +31,7 @@ class Nsx_object(object):
         firstLoop=True
         cursor = None
         result={}
-
+        resultCount = None
         while firstLoop or cursor:
             fistLoop = False
             if '?' in api:
@@ -42,9 +44,12 @@ class Nsx_object(object):
                 result['results'].extend(r['results'])
             else:
                 result = r
+                if 'result_count' in r.keys():
+                    resultCount=r['result_count']
+                
             if 'cursor' not in r:
                 return result
-            elif int(r['cursor']) == r['result_count']:
+            elif int(r['cursor']) == resultCount:
                 return result
             else:
                 cursor=r['cursor']
@@ -102,7 +107,8 @@ class Nsx_object(object):
         return r
         
     def findByName(self, name, field='display_name', removeSearch=True,
-                   api=None, data=None, display=True,brief=False):
+                   api=None, data=None, display=True,brief=False, ignorecase=False,
+                   detailApi=None):
         '''
         Find an nsxobject by display_name
         '''
@@ -116,14 +122,20 @@ class Nsx_object(object):
             data = self.list(api=api,display=False, removeSearch=removeSearch)
         obj = None
         for o in data['results']:
-            if o[field] == name:
+            if not ignorecase and o[field] == name:
                 obj = o
                 break
+            elif ignorecase and o[field].lower() == name.lower():
+                obj = 0
+                break
+            
         if obj and display:
             if brief:
                 print("%d. Name: %s" %(i,obj[field]))
                 print("    Id: %s" %(obj['id']))
             else:
+                if self.detailApi:
+                    obj=self.list(api="%s/%s" % (self.detailApi,obj['id']), display=False)
                 self.jsonPrint(data=obj)
         return obj
     
@@ -199,11 +211,16 @@ class Nsx_object(object):
             return obj['path']
         return None
 
-    def delete(self, name, force=False, display=True):
+    def delete(self, name=None, api=None, force=False, display=True, verbose=True, codes=None):
         '''
         Delete an nsxojbect found by display_name
         '''
-        if self.listApi.startswith('/policy'):
+        if api:
+            if force:
+                api="%s?force=true" %api
+            self.mp.delete(api=api, verbose=True, codes=[200])
+            
+        elif self.listApi.startswith('/policy'):
             oPath=self.getPathByName(name=name, display=False)
             if not oPath:
                 print("%s not found for delete" % name)
@@ -377,7 +394,17 @@ class Cluster(Nsx_object):
         self.mp.post(api=api,data=None, verbose=True,codes=[200])
         
             
-            
+    def startstop_ssh(self, action, name):
+        node = self.findByNameIn(name=name,display=False)
+        if not node:
+            print("Node %s not found in cluster" % name)
+            return
+        api='/api/v1/cluster/%s/node/services/ssh?action=%s' %(node['node_uuid'], action)
+        data={}
+        self.mp.post(api=api, data=data, verbose=True, codes=[200])
+        
+        
+        
         
     def getFqdnMode(self,display=False):
         r =  self.mp.get(api='/api/v1/configs/management')
@@ -503,7 +530,7 @@ class Cluster(Nsx_object):
         if not tn:
             print("Node %s not found" %node)
             return False
-        uapi = '/api/v1/cluster/%s/node/users' %tn[' id']
+        uapi = '/api/v1/cluster/%s/node/users' %tn['id']
         user = self.findByName(name=username, field='username',
                                api=uapi, display=False)
         if not user:
@@ -622,7 +649,7 @@ class GlobalConfigs(Nsx_object):
             r = self.mp.patch(api=self.listApi, data=data, verbose=True, codes=[200])
         else:
             print("No changes submitted, here's current config")
-            self.jsonPrint(data)
+            self.list(display=True)
         
                             
 
@@ -651,20 +678,44 @@ class GlobalConfigs(Nsx_object):
         else:
             print("No change submitted, no-op")
         
+class TransportZoneProfile(Nsx_object):
+    def __init__(self, mp):
+        super(self.__class__, self).__init__(mp=mp)
+        self.listApi='/policy/api/v1/infra/transport-zone-profiles'
 
+    def config(self, name, enabled=True, latency=False, interval=1000, desc=None):
+        tzp = self.findByName(name=name, display=False)
+        if tzp:
+            api='/policy/api/v1%s' % tzp['path']
+            data=tzp
+            bfd=data['bfd']
+        else:
+            api='/policy/api/v1/infra/transport-zone-profiles/%s' %name
+            data={}
+            bfd={}
+            data['bfd'] = bfd
+        data['display_name'] = name
+        data['tz_profile_type'] = "BFD"
+        data['resource_type'] = "PolicyTransportZoneProfile"
+        bfd['enabled'] = enabled
+        bfd['latency_enabled'] = latency
+        bfd['probe_interval'] = interval
+        if desc:
+            data['description'] = desc
+
+        self.mp.patch(api=api, data=data, verbose=True, codes=[200])
+        
 class TransportZone(Nsx_object):
     '''
     Read only class to search TZs.  CRUD on TZ is done via MP API
     '''
     def __init__(self,mp):
         super(self.__class__, self).__init__(mp=mp)
-        # use MP APIs for now, because the Policy just lists policy
-        # entities without them really being useful
-        #self.listApi=('/policy/api/v1/infra/sites/%s/enforcement-points/%s/transport-zones'
-        #              %(self.site, self.ep))
-        self.listApi='/api/v1/transport-zones'
+        self.listApi=('/policy/api/v1/infra/sites/%s/enforcement-points/%s/transport-zones'
+                      %(self.site, self.ep))
+        #self.listApi='/api/v1/transport-zones'
    
-    def config(self,name,transportType,isdefault, teaming=None,hswname=None,desc=None):
+    def config(self,name,transportType,isdefault, teaming=None,hswname=None,hswmode="STANDARD", desc=None):
         # hswname is being marked deprecated in G. defaults to nsxDefaultHostSwitch
         # this was always optional - but G UI now doesn't even show this anymore
         api='/api/v1/transport-zones'
@@ -681,6 +732,7 @@ class TransportZone(Nsx_object):
             data['host_switch_name'] = hswname
         data['is_default'] = isdefault
         data['transport_type'] = transportType
+        data['host_switch_mode'] = hswmode
         if teaming:
             data['uplink_teaming_policy_names'] = teaming
         if not tz:
@@ -688,18 +740,54 @@ class TransportZone(Nsx_object):
         else:
             self.mp.put(api, data=data, verbose=True, codes=[200])
 
+    def configPolicy(self, name, isdefault, tztype, nested=False,
+                     tzprofiles=None, teaming=None,
+                     desc=None):
+
+        tz = self.findByName(name=name, display=False)
+        if tz:
+            api='/policy/api/v1%s' % tz['path']
+            data=tz
+        else:
+            api=('/policy/api/v1/infra/sites/%s/enforcement-points/%s/transport-zones/%s'
+                 %(self.site, self.ep, name))
+            data={}
+
+        data['display_name'] = name
+        data['tz_type'] = tztype
+        if isdefault:
+            data['is_default'] = isdefault
+        if teaming:
+            data['uplink_teaming_policy_names'] = teaming
+        if desc:
+            data['description'] = desc
+        if nested:
+            data['nested_nsx'] = nested
+        if tzprofiles:
+            TZP = TransportZoneProfile(mp=self.mp)
+            data['transport_zone_profile_paths'] = []
+            for t in tzprofiles:
+                tzp = TZP.getPathByName(name=t, display=False)
+                if not tzp:
+                    print("TransportZone Profile %s not found" %t)
+                    return
+                data['transport_zone_profile_paths'].append(tzp)
+        self.mp.patch(api=api, data=data, verbose=True, codes=[200])
+                
+                
+
     def setNested(self, name, enable, disable):
-        api='/api/v1/transport-zones'
         tz = self.findByName(name=name, display=False)
         if not tz:
             print("Transport Zone %s not found" % name)
             return False
         api="%s/%s" %(api, tz['id'])
+        api='/policy/api/v1%s' % tz['path']
         if enable:
             tz['nested_nsx'] = True
         if disable:
             tz['nested_nsx'] = False
-        self.mp.put(api, data=tz, verbose=True, codes=[200])
+        self.mp.patch(api, data=tz, verbose=True, codes=[200])
             
     def getTransportNodeStatusReport(self):
         api='/api/v1/transport-zones/transport-node-status-report'
@@ -938,13 +1026,21 @@ class Edge(Nsx_object):
     def getState(self, name, display=True):
         TN=TransportNode(mp=self.mp, tntype='EdgeNode')
         TN.getState(name=name, display=display)
-        
+
+    def updateSsh(self, name, action, display=True):
+        e = self.findByName(name=name, display=False)
+        if not e:
+            print("Edge %s not found" %name)
+            return
+        api="/api/v1/transport-nodes/%s/node/services/ssh?action=%s" %(e['nsx_id'], action)
+        return self.mp.post(api=api, data=None, display=True, verbose=True)
+    
     def deployEdge(self, name, size, tznames, enableSsh, allowRootSsh,
                    dns, hostname, ntp, domains, rootpw, clipw, auditpw,
                    vc, cluster, storage, fpe0, fpe1, fpe2, mgmtNet, gateway,
-                   mgmtIp,mgmtMask, uplink, ippool, nics,
-                   ntype="vc",
-                   lldp=None, host=None, display=True):
+                   mgmtIp,mgmtMask, mgmtIp6, mgmtMask6, uplink, ippool, nics,
+                   ntype="vc", uplink2=None,ippool2=None, nics2=None, tznames2=None,
+                   fpe3=None, lldp=None, host=None, display=True):
 
         CM = ComputeManager(mp=self.mp)
         vcObj = CM.findByName(name=vc, display=False)
@@ -957,6 +1053,12 @@ class Edge(Nsx_object):
             print("Cluster %s not found on vc %s" %(cluster, vc))
             return None
 
+        hObj=None
+        if host:
+            hObj = CM.findHost(hostname=host, vc=vc, cluster=cluster, display=False)
+            if not hObj:
+                print("Host %s not found for edge deploy" %host)
+                return None
         sObj = CM.findStorage(cluster=cluster, name=storage, vc=vc, display=False)
         if not sObj:
             print("Storage %s not found on cluster %s on vc %s"%(storage, cluster, vc))
@@ -966,13 +1068,18 @@ class Edge(Nsx_object):
 
         dataNets=[]
 
+        S=Segments(mp=self.mp)
         if ntype != 'opaque':
             #fp-eth0
             eObj = CM.findNetwork(cluster=cluster, name=fpe0, vc=vc,
                                   storage=sId, display=False)
             if not eObj:
-                print("Network %s not found on cluster %s on vc %s" %(fpe0, cluster, vc))
-                return None
+                eObj = S.findByName(name=fpe0, api='/api/v1/logical-switches', display=False)
+                if not eObj:
+                    print("Network %s not found on cluster %s on vc %s" %(fpe0, cluster, vc))
+                    return None
+                else:
+                    dataNets.append(eObj['id'])
             else:
                 dataNets.append(eObj['network_resource']['target_id'])
 
@@ -980,8 +1087,12 @@ class Edge(Nsx_object):
             eObj = CM.findNetwork(cluster=cluster, name=fpe1, vc=vc,
                                   storage=sId, display=False)
             if not eObj:
-                print("Network %s not found on cluster %s on vc %s" %(fpe1, cluster, vc))
-                return None
+                eObj = S.findByName(name=fpe0, api='/api/v1/logical-switches', display=False)
+                if not eObj:
+                    print("Network %s not found on cluster %s on vc %s" %(fpe0, cluster, vc))
+                    return None
+                else:
+                    dataNets.append(eObj['id'])
             else:
                 dataNets.append(eObj['network_resource']['target_id'])
 
@@ -989,10 +1100,28 @@ class Edge(Nsx_object):
             eObj = CM.findNetwork(cluster=cluster, name=fpe2, vc=vc,
                                   storage=sId, display=False)
             if not eObj:
-                print("Network %s not found on cluster %s on vc %s" %(fpe2, cluster, vc))
-                return None
+                eObj = S.findByName(name=fpe0, api='/api/v1/logical-switches', display=False)
+                if not eObj:
+                    print("Network %s not found on cluster %s on vc %s" %(fpe0, cluster, vc))
+                    return None
+                else:
+                    dataNets.append(eObj['id'])
             else:
                 dataNets.append(eObj['network_resource']['target_id'])
+                
+            if fpe3:
+                eObj = CM.findNetwork(cluster=cluster, name=fpe3, vc=vc,
+                                      storage=sId, display=False)
+                if not eObj:
+                    eObj = S.findByName(name=fpe0, api='/api/v1/logical-switches', display=False)
+                    if not eObj:
+                        print("Network %s not found on cluster %s on vc %s" %(fpe0, cluster, vc))
+                        return None
+                    else:
+                        dataNets.append(eObj['id'])
+                else:
+                    dataNets.append(eObj['network_resource']['target_id'])
+                
         else:
             S=Segments(mp=self.mp)
             eObj = S.findByName(name=fpe0, api='/api/v1/logical-switches', display=False)
@@ -1018,23 +1147,37 @@ class Edge(Nsx_object):
             else:
                 dataNets.append(eObj['id'])
     
+            # fp-eth3
+            if fpe3:
+                eObj = S.findByName(name=fpe3, api='/api/v1/logical-switches', display=False)
+                if not eObj:
+                    print("Network %s not found on cluster %s on vc %s" %(fpe3, cluster, vc))
+                    return None
+                else:
+                    dataNets.append(eObj['id'])
                 
             
         tzids = []
         TZ=TransportZone(mp=self.mp)
         swname=None
         for t in tznames:
-            zid = TZ.findByName(name=t, display=False)
+            # not policy yet
+            zid = self.findByName(name=t, api='/api/v1/transport-zones', display=False)
             if not zid:
                 print("Transport zone %s not found" % zid)
                 return None
             else:
                 tzids.append({'transport_zone_id': zid['id']})
+                
                 if not swname:
-                    swname=zid['host_switch_name']
-                elif swname != zid['host_switch_name']:
-                    print("Host switch name between TZs are not the same")
-                    return
+                    if 'host_switch_name' in zid:
+                        swname=zid['host_switch_name']
+                    else:
+                        swname="nsxDefaultHostSwitch"
+                else:
+                    if 'host_switch_name' in zid and  swname != zid['host_switch_name']:
+                        print("Host switch name between TZs are not the same")
+                        return
                     
         #swname="nvds2"
         data={}
@@ -1073,6 +1216,8 @@ class Edge(Nsx_object):
         vmCfg['storage_id'] = sId
         vmCfg['data_network_ids'] = dataNets
         vmCfg['default_gateway_addresses'] = gateway
+        if hObj:
+            vmCfg['host_id'] = hObj['cm_local_id']
 
 
         # mgmtNet
@@ -1080,8 +1225,13 @@ class Edge(Nsx_object):
             mgmtObj = CM.findNetwork(cluster=cluster, name=mgmtNet, vc=vc,
                                      storage=sId, display=False)
             if not mgmtObj:
-                print("Network %s not found on cluster %s on vc %s" %(mgmtNet, cluster, vc))
-                return None
+                mgmtObj = S.findByName(name=mgmtNet, api='/api/v1/logical-switches', display=False)
+                if not mgmtObj:
+                    print("Network %s not found on cluster %s on vc %s" %(mgmtNet, cluster, vc))
+                    return None
+                else:
+                    vmCfg['management_network_id'] = mgmtObj['id']
+
             else:
                 vmCfg['management_network_id'] = mgmtObj['network_resource']['target_id']
         else:
@@ -1095,10 +1245,15 @@ class Edge(Nsx_object):
     
         vmCfg['management_port_subnets'] = [{'ip_addresses': [mgmtIp],
                                              'prefix_length': mgmtMask}]
+        if mgmtIp6 and mgmtMask6:
+            vmCfg["ipv6_assignment_type"] = "STATIC"
+            vmCfg['management_port_subnets'].append({"ip_addresses": [mgmtIp6],
+                                                    "prefix_length": mgmtMask6})
         vmCfg['placement_type'] = 'VsphereDeploymentConfig'
 
         upprofiles = HostSwitchProfile(mp=self.mp)
         profile = upprofiles.findByName(name=uplink,display=False)
+        profile = self.findByName(name=uplink,api='/api/v1/host-switch-profiles?include_system_owned=true', display=False)
         if not profile:
             print( "Can't find uplink profile with name: %s" %uplink)
             return
@@ -1108,7 +1263,6 @@ class Edge(Nsx_object):
         profItem['key'] = profile['resource_type']
         profItem['value'] = profile['id']
         profiles.append(profItem)
-
         #find LLDP profile
         lldpProfile=None
         if lldp:
@@ -1142,7 +1296,6 @@ class Edge(Nsx_object):
         pnics = []
         upIndex = 0
         vIndex = 0
-        vlanNics=[]
         if uplinkList[0]['uplink_type'] == 'PNIC':
             if len(uplinkList) < len(nics):
                 print ("You have more nics than defined in the profile")
@@ -1177,18 +1330,179 @@ class Edge(Nsx_object):
         #if tzname:
         #    data['transport_zone_endpoints'] = hsw.transportzones
 
-        vlansw=None
-        if vlansw:
-            vsw = HostSwitch(mp=self.mp, name=vlansw,pnics=vlanNics,profiles=profiles)
-            vswDict = vsw.getDict()
-            switchSpec['host_switches'].append(vswDict)
+        if uplink2:
+            vlansw=None
+            vlanNics=[]
+            profile = self.findByName(name=uplink2,api='/api/v1/host-switch-profiles?include_system_owned=true', display=False)
+            if not profile:
+                print( "Can't find uplink profile with name: %s" %uplink)
+                return
+
+            profiles = []
+            profItem={}
+            profItem['key'] = profile['resource_type']
+            profItem['value'] = profile['id']
+            profiles.append(profItem)
+            #find LLDP profile
+            lldpProfile=None
+            if lldp:
+                lldpProfile = upprofiles.findByName(name=lldp2,display=False)
+                if not lldpProfile:
+                    print ("Can't find the lldp profile with name: %s" %lldp)
+                    return
+
+
+            if lldpProfile:
+                profItem={}
+                profItem['key'] = lldpProfile['resource_type']
+                profItem['value'] = lldpProfile['id']
+                profiles.append(profItem)
+
+            #find the ippooln
+            poolProfile=None
+            if ippool2:
+                pools=IpPool(mp=self.mp)
+                poolProfile=pools.getPoolId(name=ippool2)
+                if not poolProfile:
+                    print ("Can't find the IP pool with name: %s" %ippool2)
+                    return
+
+            team = profile['teaming']
+            if 'standby_list' in team:
+                uplinkList = team['active_list'] + team['standby_list']
+            else:
+                uplinkList = team['active_list']
+
+            pnics = []
+            upIndex = 0
+            vIndex = 0
+            if uplinkList[0]['uplink_type'] == 'PNIC':
+                if len(uplinkList) < len(nics2):
+                    print ("You have more nics than defined in the profile")
+                    return
+                for n in nics2:
+                    pnic={}
+                    pnic['device_name'] = n
+                    pnic['uplink_name'] = uplinkList[upIndex]['uplink_name']
+                    pnics.append(pnic)
+                    upIndex +=1
+            else:
+                if profile['lags'][0]['number_of_uplinks'] < len(nics2):
+                    print ("You have more nics than defined in the LAG profile")
+                    return
+                for n in nics2:
+                    pnic={}
+                    pnic['device_name'] = n
+                    pnic['uplink_name'] = profile['lags'][0]['uplinks'][upIndex]['uplink_name']
+                    pnics.append(pnic)
+                    upIndex +=1
+
+            swname=None
+            for t in tznames2:
+                # not policy yet
+                zid = self.findByName(name=t, api='/api/v1/transport-zones', display=False)
+                if not zid:
+                    print("Transport zone %s not found" % zid)
+                    return None
+                else:
+                    tzids.append({'transport_zone_id': zid['id']})
+                
+                    if not swname:
+                        if 'host_switch_name' in zid:
+                            swname=zid['host_switch_name']
+                        else:
+                            swname="nsxDefaultHostSwitch" + "1"
+                    else:
+                        if 'host_switch_name' in zid and  swname != zid['host_switch_name']:
+                            print("Host switch name between TZs are not the same")
+                            return
+
+            hsw = HostSwitch(mp=self.mp,pnics=pnics, profiles = profiles,
+                             ippool=poolProfile, tz=tznames2, name=swname)
+            hswDict=hsw.getDict()
+
+            switchSpec['host_switches'].append(hswDict)
 
         data['host_switch_spec'] = switchSpec
-        
-        
+
         api='/api/v1/transport-nodes'
         return self.mp.post(api=api, data=data, verbose=True, codes=[201])
 
+
+    def getRingSize(self, name, display=True):
+        e = self.findByName(name=name, display=False)
+        if not e:
+            print("Edge %s not found" %name)
+            return
+        api='/api/v1/transport-nodes/%s/node/services/dataplane/ring-size' % e['nsx_id']
+        self.mp.get(api=api,display=True)
+        
+    def setRingSize(self, name, rx, tx, ringsize):
+        e = self.findByName(name=name, display=False)
+        if not e:
+            print("Edge %s not found" %name)
+            return
+        data={}
+        data['ring_size'] = ringsize
+
+        if tx:
+            api="/api/v1/transport-nodes/%s/node/services/dataplane/tx-ring-size" % e['nsx_id']
+            self.mp.put(api=api,data=data, verbose=True)
+        if rx:
+            api="/api/v1/transport-nodes/%s/node/services/dataplane/rx-ring-size" % e['nsx_id']
+            self.mp.put(api=api,data=data, verbose=True)
+
+    def getFlowCache(self, name, display=True):
+        e = self.findByName(name=name, display=False)
+        if not e:
+            print("Edge %s not found" % name)
+            return
+
+        api='/api/v1/transport-nodes/%s/node/services/dataplane/flow-cache' % e['nsx_id']
+        self.mp.get(api=api,display=True)
+
+    def setFlowCache(self, name, action):
+        e = self.findByName(name=name, display=False)
+        if not e:
+            print("Edge %s not found" % name)
+            return
+
+        api='/api/v1/transport-nodes/%s/node/services/dataplane/flow-cache' % e['nsx_id']
+        data={}
+        if action:
+            data['flow_cache_enabled'] = True
+        else:
+            data['flow_cache_enabled'] = False
+            
+        self.mp.put(api=api, data=data, verbose=True)
+        
+    def updateDataplane(self, name, action="get"):
+        e = self.findByName(name=name, display=False)
+        if not e:
+            print("Edge %s not found" %name)
+            return
+        if action=='get':
+            api='/api/v1/transport-nodes/%s/node/services/dataplane/status' % e['nsx_id']
+            self.mp.get(api=api,verbose=True, display=True)
+        elif action in ["start", "stop", "restart"]:
+            api='/api/v1/transport-nodes/%s/node/services/dataplane?action=%s' % (e['nsx_id'], action)
+            self.mp.post(api=api, data=None,verbose=True, display=True)
+
+    def redeploy(self, name, remHost=False):
+        e = self.findByName(name=name, display=False)
+        if not e:
+            print("Edge %s not found" %name)
+            return
+        api='/api/v1/transport-nodes/%s?action=redeploy'%e['nsx_id']
+        tnApi = '/api/v1/transport-nodes/%s' %e['nsx_id']
+        tn = self.mp.get(api=tnApi,display=False)
+        if remHost:
+            if 'deployment_config' in tn['node_deployment_info']:
+                nodeDeploy = tn['node_deployment_info']['deployment_config']
+                if 'vm_deployment_config' in nodeDeploy:
+                    if 'host_id' in nodeDeploy['vm_deployment_config']:
+                        del nodeDeploy['vm_deployment_config']['host_id']
+        self.mp.post(api=api, data=tn, verbose=True, display=True)
         
 class Tier0(Nsx_object):
     '''
@@ -1440,9 +1754,88 @@ class Tier0(Nsx_object):
         self.delete(api=api,verbose=display,codes=[200])
 
 
-    def config(self, name, failover=None, ha=None,
-               transit=None, dhcprelay=None, desc=None):
+
+    def getInterfaceGroups(self, name, locale='default', interfaceGrp=None, display=True):
+
+        t0=self.getPathByName(name=name, display=False)
+        if not t0:
+            print("Tier0 with name %s not found" %name)
+            return None
+            
+        api='/policy/api/v1' + t0 + '/locale-services/' + locale + '/interface-groups'
+
+        if interfaceGrp:
+            api=api + '/' + interfaceGrp
+
+        r = self.mp.get(api=api, display=display, codes=[200])
+        #if display:
+        #    self.jsonPrint(r)
+        return r
+
+
+    def createInterfaceGroup(self, name, interfaceGrp, 
+                        interfaces=None, snatPools=None, locale='default'):
+        
+        t0=self.getPathByName(name=name, display=False)
+        if not t0:
+            print("Tier0 with name %s not found" %name)
+            return None
+
+        api='/policy/api/v1' + t0 + '/locale-services/' \
+            + locale + '/interface-groups/' + interfaceGrp
+
+
+        members=[]
+        if interfaces:
+            for m in interfaces:  
+                apiIntf='/policy/api/v1' + t0 + '/locale-services/' \
+                        + locale + '/interfaces'
+                t0Intf=self.getPathByName(name=m, api=apiIntf,  display=False)
+                if not t0Intf: 
+                    print("Did not find interface %s under T0 router" %m)
+                    return None
+                member={}
+                member['interface_path']=t0Intf
+                members.append(member)
+        snatIpPools=[]
+        if snatPools:
+            for s in snatPools:
+                apiPool='/policy/api/v1'+'/infra/ip-pools'
+                poolPath=self.getPathByName(name=s, api=apiPool, display=False)
+                if not poolPath:
+                    print("Did not find IP Pool for SNAT by name" %s)
+                    return None
+                snatIpPools.append(poolPath)
+
+        
         data={}
+        data['display_name'] = interfaceGrp
+        data['members'] = members
+        data['source_nat_ip_pool'] = snatIpPools
+        data['resource_type'] = 'Tier0InterfaceGroup'
+
+        self.mp.patch(api=api, data=data, codes=[200], verbose=True)
+
+    def deleteInterfaceGroup(self, name, interfaceGrp, locale='default', display=True):
+        t0=self.getPathByName(name=name, display=False)
+        if not t0:
+            print("Tier0 with name %s not found" %name)
+            return None
+
+        api='/policy/api/v1' + t0 + '/locale-services/' \
+            + locale + '/interface-groups/' + interfaceGrp
+        self.mp.delete(api=api,verbose=display)
+
+
+    def config(self, name, failover=None, ha=None,
+               transit=None, dhcprelay=None, enableStatefulSvc=False,
+               redirPolicy=None,
+               disableFw=False, desc=None):
+        t0 = self.findByName(name=name,display=False)
+        if t0:
+            data=t0
+        else:
+            data={}
         data['display_name'] = name
 
         if failover:
@@ -1453,6 +1846,19 @@ class Tier0(Nsx_object):
             data['transit_subnets'] = [transit]
         if desc:
             data['description'] = desc
+        if ha != 'ACTIVE_ACTIVE' and enableStatefulSvc:
+            print("Enable stateful service shoudl be used with ACTIVE_ACTIVE HA mode only")
+            return False
+        if enableStatefulSvc:
+            data['stateful_services'] = {}
+            data['stateful_services']['enabled'] = True
+            data['stateful_services']['redirection_policy'] = redirPolicy
+        elif ha=="ACTIVE_ACTIVE":
+            data['stateful_services'] = {}
+            data['stateful_services']['enabled'] = False
+            data['stateful_services']['redirection_policy'] = 'NONE'
+        if disableFw:
+            data['disable_firewall'] = disableFw
         if dhcprelay:
             ds=DhcpRelay(mp=self.mp)
             dhcp=ds.getPathByName(name=dhcprelay, display=False)
@@ -1786,12 +2192,12 @@ class Tier0(Nsx_object):
             data['graceful_restart_mode'] = gr
 
         routefilter = {}
+        #if ipv6:
+        #    routefilter['address_family'] = 'IPV6'
+        #else:
+        #    routefilter['address_family'] = 'IPV4'
         if ipv6:
-            routefilter['address_family'] = 'IPV6'
-        else:
-            routefilter['address_family'] = 'IPV4'
-
-        data['route_filtering']=[routefilter]
+            data['route_filtering']=[{"enabled": True, "address_family": "IPV4"}, {"enabled": True, "address_family": "IPV6"}]
         pfx=PrefixList(mp=self.mp, tier0=None,t0Path=t0)
         rmp=RouteMap(mp=self.mp, tier0=None,t0Path=t0)
         if inPrefixList or inRouteMap:
@@ -1939,6 +2345,7 @@ class Tier0(Nsx_object):
         data['pim_profile_path']=pim
         self.mp.patch(api=api, data=data, verbose=True, codes=[200])
 
+        
 class PimProfile(Nsx_object):
     def __init__(self, mp):
         super(self.__class__, self).__init__(mp=mp)
@@ -2220,13 +2627,19 @@ class Tier1(Nsx_object):
         #self.listApi='/policy/api/v1/infra/tier-1s'
         self.objectApi='/policy/api/v1/infra/tier-1s'
 
-    def deleteT1(self, name):
+    def delete(self, name, force=False):
         t1 = self.findByName(name=name, display=False)
         if not t1:
             print("Tier1 %s not found" %name)
             return None
 
         locales = self.getLocale(name=name, display=False)['results']
+        if len(locales) > 0 and force:
+            svi = self.getInterfaces(tier1=name, display=False)
+            for i in svi['results']:
+                print("Force - delete interface name: %s, path: %s" %(i['display_name'],
+                                                                      i['path']))
+                self.deleteInterface(tier1=name, name=i['display_name'], display=False)
         for locale in locales:
             api='/policy/api/v1%s' %locale['path']
             self.mp.delete(api=api,verbose=True, codes=[200])
@@ -2258,9 +2671,13 @@ class Tier1(Nsx_object):
         r = self.mp.get(api=api, verbose=True, display=True)
         
     def config(self, name, preempt="NON_PREEMPTIVE", tier0=None, dhcprelay=None,
-               standby_relocate=False,
+               standby_relocate=False, ha = 'ACTIVE_STANDBY',disableFw=False,
                advertisements=None):
-        data={}
+        t1 = self.findByName(name=name, display=False)
+        if not t1:
+            data={}
+        else:
+            data=t1
         data['display_name'] = name
         data['failover_mode'] = preempt
         if tier0:
@@ -2283,6 +2700,9 @@ class Tier1(Nsx_object):
                 return False
             data['dhcp_config_paths'] = [dhcp]
 
+        data['ha_mode'] = ha
+        if disableFw:
+            data['disable_firewall'] = disableFw
         api='/policy/api/v1/infra/tier-1s/%s' %name
         self.mp.patch(api=api,data=data,verbose=True,codes=[200])
 
@@ -2332,7 +2752,7 @@ class Tier1(Nsx_object):
         if edges:
             preferred=[]
             edge=Edge(mp=self.mp)
-            edgeList = edge.list(ec=clustername,display=False)
+            edgeList = edge.listOld(ec=clustername,display=False)
             for e in edges:
                 epath = edge.getPathByName(name=e, data=edgeList, display=False)
                 if not epath:
@@ -2354,6 +2774,18 @@ class Tier1(Nsx_object):
         r = self.list(api=api,display=display)
         return r
 
+    def deleteInterface(self, tier1, name, locale='default', display=True):
+        data=self.getInterfaces(tier1=tier1, locale=locale, display=False)
+        if not data:
+            print("Tier1 with name %s doesn't exist")
+            return None
+        
+        svi = self.findByName(data=data, name=name, display=False)
+        if not svi:
+            print("Interface %s on Tier1 %s doesn't exist" %(name, tier1))
+            return None
+        api="/policy/api/v1%s" % svi['path']
+        self.mp.delete(api=api, verbose=True, codes=[200])
     def configInterface(self, tier1, intName, segment,
                         addrs, mask, locale='default'):
         t1path=self.getPathByName(name=tier1, display=False)
@@ -2379,6 +2811,81 @@ class Tier1(Nsx_object):
         
         api='/policy/api/v1%s/locale-services/%s/interfaces/%s' %(t1path,locale,intName)
         self.mp.patch(api=api,verbose=True,data=data)
+
+
+
+    def getInterfaceGroups(self, name, locale='default', interfaceGrp=None, display=True):
+
+        t1=self.getPathByName(name=name, display=False)
+        if not t1:
+            print("Tier1 with name %s not found" %name)
+            return None
+            
+        api='/policy/api/v1' + t1 + '/locale-services/' + locale + '/interface-groups'
+
+        if interfaceGrp:
+            api=api + '/' + interfaceGrp
+
+        r = self.mp.get(api=api, display=display, codes=[200])
+        #if display:
+        #    self.jsonPrint(r)
+        return r
+
+
+    def createInterfaceGroup(self, name, interfaceGrp, 
+                        interfaces=None, snatPools=None, locale='default'):
+        
+        t1=self.getPathByName(name=name, display=False)
+        if not t1:
+            print("Tier1 with name %s not found" %name)
+            return None
+
+        api='/policy/api/v1' + t1 + '/locale-services/' \
+            + locale + '/interface-groups/' + interfaceGrp
+
+
+        members=[]
+        if interfaces:
+            for m in interfaces:  
+                apiIntf='/policy/api/v1' + t1 + '/locale-services/' \
+                        + locale + '/interfaces'
+                t1Intf=self.getPathByName(name=m, api=apiIntf,  display=False)
+                if not t1Intf: 
+                    print("Did not find interface %s under T1 router" %m)
+                    return None
+                member={}
+                member['interface_path']=t1Intf
+                members.append(member)
+        snatIpPools=[]
+        if snatPools:
+            for s in snatPools:
+                apiPool='/policy/api/v1'+'/infra/ip-pools'
+                poolPath=self.getPathByName(name=s, api=apiPool, display=False)
+                if not poolPath:
+                    print("Did not find IP Pool for SNAT by name" %s)
+                    return None
+                snatIpPools.append(poolPath)
+
+        
+        data={}
+        data['display_name'] = interfaceGrp
+        data['members'] = members
+        data['source_nat_ip_pool'] = snatIpPools
+        data['resource_type'] = 'Tier1InterfaceGroup'
+
+        self.mp.patch(api=api, data=data, codes=[200], verbose=True)
+
+    def deleteInterfaceGroup(self, name, interfaceGrp, locale='default', display=True):
+        t1=self.getPathByName(name=name, display=False)
+        if not t1:
+            print("Tier1 with name %s not found" %name)
+            return None
+
+        api='/policy/api/v1' + t1 + '/locale-services/' \
+            + locale + '/interface-groups/' + interfaceGrp
+        self.mp.delete(api=api,verbose=display)
+
+
     def parseNextHops(self, hops):
         data=[]
         for i in hops:
@@ -2557,7 +3064,7 @@ class Segments(Nsx_object):
         else:
             data = preExisting
             api='/policy/api/v1%s' % data['path']
-            
+             
         data['display_name'] = name
         if admin:
             data['admin_state'] = admin
@@ -2637,6 +3144,172 @@ class Segments(Nsx_object):
             data['overlay_id'] = vni
 
         self.mp.patch(api=api, data=data,verbose=True, codes=[200])
+
+
+    def setEdgeBridgeProfile(self, name, tz, bProfile, vlans):
+        '''
+        name - name of the segment, will be used as ID for path
+        tz = name of the bridge vlan transportzone
+        bProfile = name of the bridge profile t be attached
+        vlans = list of vlans to be configured for the bridge
+        '''
+
+        api='/policy/api/v1/infra/segments/%s' %name
+            
+
+        preExisting = self.findByName(name=name)
+        if not preExisting:
+            print("Cound not find segment %s" % name)
+            return
+        data = preExisting
+        api='/policy/api/v1%s' % data['path']
+
+        bpObj = EdgeBridgeProfile(mp=self.mp)
+        bp = bpObj.getPathByName(name=bProfile, display=False)
+        if not bp:
+            print("Counld not find bridge profile %s" %bProfile)
+            return
+
+        myTz = None
+        if tz:
+            t = TransportZone(mp=self.mp)
+            tzapi = ('/policy/api/v1/infra/sites/%s/enforcement-points/default/transport-zones' %
+                   self.site)
+
+            myTz = t.getPathByName(name=tz,
+                                   api=tzapi,
+                                   display=False)
+            if not myTz:
+                print("TZ %s not found" %tz)
+                return None
+
+        bData={}
+        if 'bridge_profiles' not in data:
+            data['bridge_profiles'] = []
+            bData['bridge_profile_path'] = bp
+            bData['vlan_ids'] = vlans
+            bData['vlan_transport_zone_path'] = myTz
+            data['bridge_profiles'].append(bData)
+        else:
+            ##check if the BP is already applied
+            found = False
+            for i in data['bridge_profiles']:
+                if bp == i['bridge_profile_path']: 
+                    found = True
+                    i['vlan_ids'] = vlans
+                    i['vlan_transport_zone_path'] = myTz
+            if not found:
+                bData['bridge_profile_path'] = bp
+                bData['vlan_ids'] = vlans
+                bData['vlan_transport_zone_path'] = myTz
+                data['bridge_profiles'].append(bData)
+
+        self.mp.patch(api=api, data=data,verbose=True, codes=[200])
+
+
+    def deleteEdgeBridgeProfile(self, name, bProfile):
+        '''
+        name - name of the segment, will be used as ID for path
+        tz = name of the bridge vlan transportzone
+        bProfile = name of the bridge profile t be attached
+        vlans = list of vlans to be configured for the bridge
+        '''
+
+        api='/policy/api/v1/infra/segments/%s' %name
+            
+
+        preExisting = self.findByName(name=name)
+        if not preExisting:
+            print("Cound not find segment %s" % name)
+            return
+        data = preExisting
+        api='/policy/api/v1%s' % data['path']
+
+        bpObj = EdgeBridgeProfile(mp=self.mp)
+        bp = bpObj.getPathByName(name=bProfile, display=False)
+        if not bp:
+            print("Counld not find bridge profile %s" %bProfile)
+            return
+
+        bData={}
+        if 'bridge_profiles' not in data:
+            print('Bridge profile %s is not attached to the segment' %bProfile)
+            return
+        else:
+            ##check if the BP is already applied
+            found = False
+            for i in data['bridge_profiles']:
+                if bp == i['bridge_profile_path']: 
+                    found = True
+                    data['bridge_profiles'].remove(i)
+            if not found:
+                print('Bridge profile %s is not attached to the segment' %bProfile)
+                return
+        self.mp.patch(api=api, data=data,verbose=True, codes=[200])
+
+    def getBridgePortUUID(self, name, bProfile):
+        '''
+        name - name of the segment, will be used as ID for path
+        bProfile = name of the bridge profile t be attached
+        '''
+
+        api='/policy/api/v1/infra/segments/%s' %name
+        preExisting = self.findByName(name=name, display=False)
+        if not preExisting:
+            print("Cound not find segment %s" % name)
+            return
+        data = preExisting
+
+        bpObj = EdgeBridgeProfile(mp=self.mp)
+        bp = bpObj.findByName(name=bProfile, display=False)
+        if not bp:
+            print("Counld not find bridge profile %s" %bProfile)
+            return
+
+        ls_id = data['realization_id']
+        bp_id = bp['unique_id']
+        search_api="/api/v1/search?query=attachment.attachment_type:BRIDGEENDPOINT"
+        data = self.list(api=search_api,display=False)
+        for d  in data['results']:
+            if d['logical_switch_id'] == ls_id:
+                ##Get the BEP details and check with bp_id
+                att_id = d['attachment']['id']
+                search_api="/api/v1/bridge-endpoints/%s" %att_id
+                att_data=self.list(api=search_api,display=False)
+                if att_data['bridge_endpoint_profile_id'] == bp_id:
+                    print(d['id'])
+                    return 
+        print("Cound not find a port on the segment %s with bridge profile %s attached" %(name,bProfile))
+        return
+            
+            
+
+    def getBridgeStats(self, name, bProfile):
+        '''
+        name - name of the segment, will be used as ID for path
+        bProfile = name of the bridge profile t be attached
+        '''
+
+        api='/policy/api/v1/infra/segments/%s' %name
+            
+
+        preExisting = self.findByName(name=name,display=False)
+        if not preExisting:
+            print("Cound not find segment %s" % name)
+            return
+        data = preExisting
+        api='/policy/api/v1%s' % data['path']
+
+        bpObj = EdgeBridgeProfile(mp=self.mp)
+        bp = bpObj.getPathByName(name=bProfile, display=False)
+        if not bp:
+            print("Counld not find bridge profile %s" %bProfile)
+            return
+
+        bep_api='/policy/api/v1/infra/segments/%s/bep-statistics?bridge_profile_path=%s' %(name,bp)
+        r = self.mp.get(api=bep_api, verbose=True, codes=[200])
+        self.jsonPrint(r)
+
 
     def tagSegment(self, segmentName, tags, replace=False, partial=False):
         seg = self.findByName(name=segmentName, display=False)
@@ -2722,7 +3395,7 @@ class SegmentPort(Nsx_object):
                 raise ValueError("Cannot find segment %s" %segmentName)
         self.listApi='/policy/api/v1'+ self.segmentPath+'/ports'
 
-    def config(self, name, vif=None, tagspec=None):
+    def config(self, name, vif=None, unblocked=False, tagspec=None):
         tags=None
         if tagspec:
             T = Tags(mp=self.mp)
@@ -2734,6 +3407,9 @@ class SegmentPort(Nsx_object):
             data['attachment'] = {'id': vif}
         if tags:
             data['tags'] = tags
+        if unblocked:
+            data['init_state'] = "UNBLOCKED_VLAN"
+        
         api=self.listApi + '/%s' % name.replace(' ', '_')
         self.mp.patch(api=api,data=data,verbose=True,codes=[200])
 
@@ -2807,7 +3483,7 @@ class ComputeManager(Nsx_object):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi='/api/v1/fabric/compute-managers'
         
-    def register(self, svrName, server, username, password,
+    def register(self, svrName, server, username, password, multi=False,
                  thumbprint=None,trust=True,svrType='vCenter'):
     
         d = self.findByName(name=svrName, display=False)
@@ -2829,6 +3505,9 @@ class ComputeManager(Nsx_object):
 
         if trust:
             data['set_as_oidc_provider'] = trust
+
+        if multi:
+            data['multi_nsx'] = multi
             
         if d:
             apip='/api/v1/fabric/compute-managers/%s' % d['id']
@@ -2880,6 +3559,35 @@ class ComputeManager(Nsx_object):
             return None
         api='/api/v1/fabric/compute-collections/%s/storage-resources' % c
         return self.list(api=api, display=display)
+
+    def findHost(self, hostname, vc=None, cluster=None, display=True):
+        api='/api/v1/fabric/discovered-nodes'
+        cm=None
+        if vc:
+            cm = self.findByName(name=vc, display=False)
+            if not cm:
+                print("Compute Manager %s not found" %vc)
+                return None
+        if cluster:
+            if not vc:
+                print("Must specify VCenter when specifying cluster")
+                return None
+            
+            r = self.findClusterId(cluster=cluster, vc=vc, display=False)
+            if not r:
+                print("Cluster %s not found in vc %s" %(cluster, vc))
+                return None
+            else:
+                api=api+"?parent_compute_collection=%s"%r
+        h = self.findByName(api=api, name=hostname, display=False)
+        if not h:
+            print("Hostname %s not found" %hostname)
+            return None
+        return h
+    
+
+                
+            
         
     def findStorage(self, cluster, name, vc=None,display=True):
         c = self.findClusterId(cluster=cluster, vc=vc, display=False)
@@ -3078,15 +3786,26 @@ class ComputeCollections (Nsx_object):
 class TNCollections (Nsx_object):
         def __init__(self,mp):
             super(self.__class__, self).__init__(mp=mp)
-            self.listApi='/api/v1/transport-node-collections'
-
-        def config(self, computecollection, tnprofile, name=None, desc=None):
+            #self.listApi='/api/v1/transport-node-collections'
+            self.listApi='/policy/api/v1/infra/sites/%s/enforcement-points/%s/transport-node-collections' % (self.site, self.ep)
+            
+        def config(self, computecollection, tnprofile, name=None, desc=None, removeTnp=None):
             '''
             name = name of this TNCollection
             desc = Description of TNCollection
             compute-collection =  name of vc-cluster to configure
             transport-node-profile = name of TN-Profile to configure compute-collection
             '''
+            if not name:
+                name=computecollection
+            tnc = self.findByName(name=name,display=False)
+            if tnc:
+                data=tnc
+                api='/policy/api/v1%s' % tnc['path']
+            else:
+                data={}
+                api="%s/%s" %(self.listApi, name)
+                
             data = {}
             data['display_name'] = name
             data['resource_type'] = 'TransportNodeCollection'
@@ -3095,7 +3814,7 @@ class TNCollections (Nsx_object):
 
             if computecollection:
                 C = ComputeCollections(mp=self.mp)
-                c = C.findByName(name=computecollection, display=False)
+                c = C.findByName(name=name, display=False)
                 data['compute_collection_id'] = c['external_id']
 
                 if not c:
@@ -3108,16 +3827,30 @@ class TNCollections (Nsx_object):
                 if not t:
                     print("Transport node profile %s not found" %tnprofile)
                     return None
-                data['transport_node_profile_id'] = t['id']
+                data['transport_node_profile_id'] = t['path']
                 
                 if not t:
                     print("TN Profile %s not found" %tnprofile)
                     return None
             if removeTnp:
                 del data['transport_node_profile_id']
-            api='/api/v1/transport-node-collections'
-            r = self.mp.post(api=api,data=data,verbose=True, codes=[201])
+            r = self.mp.patch(api=api,data=data,verbose=True, codes=[200])
 
+        def updateForDfw(self, name, enable=True):
+            C = ComputeCollections(mp=self.mp)
+            cluster = C.findByName(name=name, display=False)
+            if not cluster:
+                print("Cluster %s not found" %name)
+                return
+            tnc = self.findByName(name=cluster["external_id"],
+                                  field="compute_collection_id",
+                                  display=False)
+            if not tnc:
+                print("Transport node Collection not found for cluster %s" %name)
+                return
+            tnc["enable_nsx_on_dvpg"] = enable
+            api="/policy/api/v1%s" % tnc["path"]
+            r = self.mp.patch(api=api,data=tnc, verbose=True, codes=[200])
         def detachTnp(self, name):
             C = ComputeCollections(mp=self.mp)
             cluster = C.findByName(name=name, display=False)
@@ -3416,6 +4149,24 @@ class Group(Nsx_object):
             raise ValueError("No valid segments found to add, spec: %s:" %segments)
         self.__addToExpressions(expr=expr, data=data,
                                 conjunction=conjunction)
+
+    def __handleHosts(self, hosts, expr, conjunction):
+        s = HostTransportNode(mp=self.mp)
+
+        data={}
+        data['resource_type'] = 'PathExpression'
+        data['paths'] = []
+        
+        for h in hosts:
+            host = s.getPathByName(name=h, display=False)
+            if not host:
+                raise ValueError("Host %s not found" %h)
+            data['paths'].append(host)
+        if len(data['paths']) == 0:
+            raise ValueError("No hosts found to be added to group: %s" %hosts)
+        self.__addToExpressions(expr=expr, data=data, conjunction=conjunction)
+
+        
     def __handleGroups(self, groups, expr, conjunction):
         data={}
         data['resource_type'] ='PathExpression'
@@ -3520,7 +4271,8 @@ class Group(Nsx_object):
                ports=None,
                segments=None,
                groups=None,
-               tags=None):
+               hosts=None):
+
         '''
         expressions: "expr" [[expr] [..]]
               -One or more expr
@@ -3530,7 +4282,7 @@ class Group(Nsx_object):
           conjunction: AND or OR,
                         if AND, the two member_type being AND'ed must be same
                         When empty, implies OR when nesting, AND when nesting
-          member_type: VirtualMachine, IPSet, LogicalPort, LogicalSwitch
+          member_type: VirtualMachine, IPSet, LogicalPort/SegmentPort, LogicalSwitch/Segment
           key:
                  if member_type == VirtualMachine:
                       Name, OSName, ComputerName, Tag
@@ -3566,6 +4318,7 @@ class Group(Nsx_object):
                     nest['resource_type'] = 'NestedExpression'
                     nest['expressions'] = []
                     nsgroup['expression'].append(nest)
+                    nsgroup['expression'].append(OR)
                     addTo=nest['expressions']
                     nesting = True
                 else:
@@ -3603,13 +4356,19 @@ class Group(Nsx_object):
                         currentExpr['member_type'] = 'LogicalPort'
                     elif mtype == 'logicalswitch':
                         currentExpr['member_type'] = 'LogicalSwitch'
+                    elif mtype == 'segment':
+                        currentExpr['member_type'] = 'Segment'
+                    elif mtype == 'segmentport':
+                        currentExpr['member_type'] = 'SegmentPort'
+                    
+                    
                     else:
                         raise ValueError("Expression member type must be one of "
                                          "IPSet, VirtualMachine, LogicalPort, "
                                          "LogicalSwitch: %s" %c)
 
                     key = conditions[2].strip().lower()
-                    if mtype in ['ipset', 'logicalport', 'logicalswitch']:
+                    if mtype in ['ipset', 'logicalport', 'logicalswitch', 'segment', 'segmentport']:
                         if key != 'tag':
                             raise ValueError("IPSet, LogicalPort and LogicalSwitch "
                                              "matches only Tag: %s" %c)
@@ -3645,7 +4404,8 @@ class Group(Nsx_object):
                         currentExpr['value'] = conditions[4].strip()
                     currentExpr['resource_type'] = 'Condition'
                     addTo.append(currentExpr)
-
+            if nesting:
+                nsgroup['expression'] = nsgroup['expression'][:-1]
         if segments:
             self.__handleSegments(segments=segments, expr=nsgroup['expression'],
                                   conjunction=OR)
@@ -3658,16 +4418,16 @@ class Group(Nsx_object):
         if vifs:
             self.__handleVifs(vifs=vifs, expr=nsgroup['expression'],
                              conjunction=OR)
+
+        if hosts:
+            self.__handleHosts(hosts=hosts, expr=nsgroup['expression'],
+                               conjunction=OR)
         if ipaddrs:
             self.__handleIpAddrs(ips=ipaddrs, expr=nsgroup['expression'],
                              conjunction=OR)
         if macaddrs:
             self.__handleMacAddrs(macs=macaddrs, expr=nsgroup['expression'],
                              conjunction=OR)
-        if ports:
-            # not yet implimented
-            pass
-        
         api='/policy/api/v1/infra/domains/%s/groups/%s' % (domain,name)
         self.mp.patch(api=api,data=nsgroup, verbose=True,codes=[200])
 
@@ -3744,7 +4504,7 @@ class SecurityPolicy(Nsx_object):
         else:
             self.domain = 'default'
         self.listApi='/policy/api/v1/infra/domains/%s/security-policies' % self.domain
-        self.listApi='/policy/api/v1/search/query?query=resource_type:SecurityPolicy'
+        #self.listApi='/policy/api/v1/search/query?query=resource_type:SecurityPolicy'
     def config(self, name, domain='default', category='Application', scope=None,
                stateless=False, tcpstrict=False, connectivity="NONE",
                sequence=None,desc=None):
@@ -3838,14 +4598,122 @@ class SecurityPolicy(Nsx_object):
         api='/policy/api/v1%s'%path
         self.mp.delete(api=api,verbose=True)
 
-class Rule(Nsx_object):
-    def __init__(self, mp, policy, domain='default'):
+
+class GatewayPolicy(Nsx_object):
+    def __init__(self, mp, domain='default'):
         super(self.__class__, self).__init__(mp=mp)
         if domain:
             self.domain = domain
         else:
             self.domain = 'default'
-        p = SecurityPolicy(mp=self.mp, domain=self.domain)
+        self.listApi='/policy/api/v1/infra/domains/%s/gateway-policies' % self.domain
+        self.listApi='/policy/api/v1/search/query?query=resource_type:GatewayPolicy'
+    def config(self, name, domain='default', category='LocalGatewayRules', scope=None,
+               stateless=False, tcpstrict=False, connectivity="NONE",
+               sequence=None,desc=None):
+
+        data={}
+        data['display_name'] = name
+        data['category'] = category
+        data['resource_type'] = "GatewayPolicy"
+        if desc:
+            data['description'] = desc
+        if stateless:
+            data['stateful'] = False
+        else:
+            data['stateful'] = True
+        if tcpstrict:
+            data['tcp_strict'] = True
+        if sequence:
+            data['sequence_number'] = sequence
+        #data['connectivity_strategy'] = connectivity
+        #if scope:
+        #    G = Group(mp=self.mp)
+        #    data['scope']=[]
+        #    for g in scope:
+        #        p = G.getPathByName(name=g, display=False)
+        #        if not p:
+        #            print("Group %s not found" % g)
+        #            return None
+        #        data['scope'].append(p)
+
+        api='/policy/api/v1/infra/domains/%s/gateway-policies/%s' %(domain,name)
+        #api="%s?action=revise&operation=insert_bottom" %api
+        self.mp.patch(api=api,data=data,verbose=True,codes=[200])
+        #self.mp.post(api=api,data=data,verbose=True,codes=[200])
+    def getStats(self, name, rule=None, display=True):
+        myPath=self.getPathByName(name=name, display=False)
+        if not myPath:
+            print("Gateway Policy %s not found" %name)
+            return None
+
+        if rule:
+            R=Rule(mp=self.mp, policy=name , pType="GatewayPolicy")
+            rId=R.getIdByName(name=rule)
+            if not rId:
+                print("Rule %s not found in Policy %s" %(rule, name))
+                return None
+            api=('/policy/api/v1%s/rules/%s/statistics'
+                 %(myPath, rId))
+        else:
+            api=('/policy/api/v1%s/statistics' %myPath)
+
+        r = self.mp.get(api=api,verbose=display)
+        if display:
+            self.jsonPrint(r)
+        return r
+                 
+
+        
+        
+    def position(self, name, domain='default', operation='insert_top',
+                 anchor=None, anchordomain='default'):
+        thisPath = self.getPathByName(name=name, display=False)
+        if not thisPath:
+            raise ValueError("Gateway Policy '%s' not found" %name)
+        # why is data required on position change?  PR2332363
+        thisData = self.findByName(name=name,display=False)
+        if anchor:
+            aObj=GatewayPolicy(mp=self.mp,domain=anchordomain)
+            anchorPath=aObj.getPathByName(name=anchor, display=False)
+        else:
+            anchorPath=None
+
+        if not anchorPath and operation in ['insert_before','insert_after']:
+            raise ValueError("An anchor must be provided for insert bvefore/after")
+
+        api='/policy/api/v1%s?action=revise' % (thisPath)
+        operation='&operation=%s' %operation
+        if anchorPath:
+            anchorPosition='&anchor_path=%s' % anchorPath
+            fullApi="%s%s%s" %(api,operation,anchorPosition)
+        else:
+            fullApi="%s%s" %(api,operation)
+
+        self.mp.post(api=fullApi,data=thisData,verbose=True,codes=[200])
+
+
+    def delete(self, name):
+        path=self.getPathByName(name=name, display=False)
+        if not path:
+            print("Gateway policy %s not found" %name)
+            return
+            
+        api='/policy/api/v1%s'%path
+        self.mp.delete(api=api,verbose=True)
+
+class Rule(Nsx_object):
+    def __init__(self, mp, policy,  domain='default', pType='SecurityPolicy'):
+        super(self.__class__, self).__init__(mp=mp)
+        if domain:
+            self.domain = domain
+        else:
+            self.domain = 'default'
+        print(pType)
+        if pType == 'GatewayPolicy':
+            p = GatewayPolicy(mp=self.mp, domain=self.domain) 
+        else:
+            p = SecurityPolicy(mp=self.mp, domain=self.domain)
 
 
         self.policyPath = p.getPathByName(name=policy, display=False)
@@ -3934,32 +4802,37 @@ class Rule(Nsx_object):
             
             
         if scope:
-            data['scope']=[]
-            for i in scope:
-                if i=='ANY':
-                    data['scope'].append('ANY')
-                    break
-                sType,sDomain,sValue=i.split(':')
-                if sDomain.strip()=='':
-                    sDomain=policydomain
-                else:
-                    sDomain = sDomain.strip()
-                if sType.strip().lower() == 'group':
-                    G = Group(mp=self.mp, domain=sDomain)
-                    path=G.getPathByName(name=sValue, display=False)
-                    if not path:
-                        print("Path not found for group %s for applied-to spec: %s"
-                              %(sValue,i))
-                        return
-                    data['scope'].append(path)
-                elif sType.strip().lower() == 'segment':
-                    S = Segments(mp=self.mp)
-                    path = S.getPathByName(name=sValue, display=False)
-                    if not path:
-                        print("Path not found for segment %s for applied-to spec: %s"
-                              %(sValue, i))
-                        return
-                    data['scope'].append(path)
+            if "/gateway-policies/" in self.policyPath:
+                data['scope']=[]
+                for i in scope:
+                    data['scope'].append(i)
+            else:
+                data['scope']=[]
+                for i in scope:
+                    if i=='ANY':
+                        data['scope'].append('ANY')
+                        break
+                    sType,sDomain,sValue=i.split(':')
+                    if sDomain.strip()=='':
+                        sDomain=policydomain
+                    else:
+                        sDomain = sDomain.strip()
+                    if sType.strip().lower() == 'group':
+                        G = Group(mp=self.mp, domain=sDomain)
+                        path=G.getPathByName(name=sValue, display=False)
+                        if not path:
+                            print("Path not found for group %s for applied-to spec: %s"
+                                  %(sValue,i))
+                            return
+                        data['scope'].append(path)
+                    elif sType.strip().lower() == 'segment':
+                        S = Segments(mp=self.mp)
+                        path = S.getPathByName(name=sValue, display=False)
+                        if not path:
+                            print("Path not found for segment %s for applied-to spec: %s"
+                                  %(sValue, i))
+                            return
+                        data['scope'].append(path)
 
 
         self.mp.patch(api=fullApi,data=data,verbose=True,codes=[200])
@@ -4060,6 +4933,37 @@ class VirtualMachine(Nsx_object):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi = '/policy/api/v1/infra/realized-state/enforcement-points/%s/virtual-machines' % self.ep
 
+    def match(self, name, starts=False, ends=False, contains=False,
+              ignorecase=False, display=False):
+        # only one of starts, ends, and contains will take effect
+        matched = []
+        if not starts and not ends and not contains:
+            return [self.findByName(name=name, ignorecase=ignorecase, display=display)]
+        allVms = self.list(display=False)['results']
+        for vm in allVms:
+            print("Checking %s against %s" %(vm['display_name'], name))
+            if contains:
+                if ignorecase and name.lower() in vm['display_name'].lower():
+                    matched.append(vm)
+                elif name in vm['display_name']:
+                    print("matched")
+                    matched.append(vm)
+            elif starts:
+                if ignorecase and vm['display_name'].lower().startswith(name.lower()):
+                    matched.append(vm)
+                elif vm['display_name'].startswith(name):
+                    print("matched")
+                    matched.append(vm)
+            elif ends:
+                if ignorecase and vm['display_name'].lower().endswith(name.lower()):
+                    matched.append(vm)
+                elif vm['display_name'].endswith(name):
+                    print("matched")
+                    matched.append(vm)
+        if display:
+            self.jsonPrint(data={'results': matched})
+        return matched
+    
     def tag(self, vmname, tags, replace=False):
         vm = self.findByName(name=vmname, display=False)
         if not vm:
@@ -4337,7 +5241,7 @@ class LBMonitorProfile(Nsx_object):
                    timeout=None,
                    port=None):
         self.configGenericMonitor(name=name, desc=desc,
-                                  maxlen=maxlen,
+                                  datalen=datalen,
                                   monitorType="ICMP",
                                   fallCount=fallCount,
                                   riseCount=riseCount,
@@ -4725,7 +5629,7 @@ class LBPool(Nsx_object):
                 name,ip,state,backup,maxcon,port,weight=i.split('|')
                 if name.strip() != '':
                     m['display_name'] = name.strip()
-                m['ip_address'] == ip.strip()
+                m['ip_address'] = ip.strip()
                 if backup.strip().lower() == 'true':
                     m['backup_member'] = True
                 else:
@@ -4737,7 +5641,7 @@ class LBPool(Nsx_object):
                 if weight.strip() != '':
                     m['weogjt']=weight.strip()
 
-                mg['members'].append(m)
+                data['members'].append(m)
         if min_active_members:
             data['min_active_members'] = min_active_members
         if snat_translation:
@@ -4989,7 +5893,7 @@ class HostSwitch(Nsx_object):
             self.transportzones = []
             T = TransportZone(mp=mp)
             for z in tz:
-                t = T.findByName(name=z, display=False)
+                t = T.findByName(name=z, api='/api/v1/transport-zones',display=False)
                 if not t:
                     raise ValueError("HostSwitch: TZ not found: %s" %z)
                 self.transportzones.append({'transport_zone_id': t['id']})
@@ -5016,6 +5920,12 @@ class HostSwitch(Nsx_object):
         
         return data
 
+class HostTransportNode(Nsx_object):
+    def __init__(self, mp, site='default', enforcementPoint='default'):
+        super(self.__class__, self).__init__(mp=mp)        
+        self.listApi='/policy/api/v1/infra/sites/%s/enforcement-points/%s/host-transport-nodes' %(site, enforcementPoint)
+
+    
 class TransportNode(Nsx_object):
     #
     # New class to support fabric management for transport nodes
@@ -5025,8 +5935,10 @@ class TransportNode(Nsx_object):
         super(self.__class__, self).__init__(mp=mp)
         if not tntype:
             self.listApi = '/api/v1/transport-nodes'
+            self.detailApi = '/api/v1/transport-nodes'
         else:
             self.listApi = '/api/v1/transport-nodes?node_types=%s' % tntype
+            self.detailApi = '/api/v1/transport-nodes'
                   
     
     def find(self,name=None,id=None,ip=None,display=True):
@@ -5036,6 +5948,7 @@ class TransportNode(Nsx_object):
             return self.findByIp(ip=ip,display=display)
         else:
             return self.findByName(name=name,display=display)
+                                        
 
     def findByNodeId(self,id,display=True):
         nodes = self.list(display=False)
@@ -5070,7 +5983,7 @@ class TransportNode(Nsx_object):
             print("No transport node found with IP %s" %ip)
         return None
 
-    def delete(self,name,display=False):
+    def delete(self,name,force=False,display=False):
         tn = self.find(name=name,display=False)
         if not tn:
             print("Transport node delete - node not found: %s" %name)
@@ -5306,8 +6219,8 @@ class TransportNode(Nsx_object):
             return
 
         #Find the uplink profile
-        upprofiles = HostSwitchProfile(mp=self.mp)
-        profile = upprofiles.findByName(name=uplink,display=False)
+        #upprofiles = HostSwitchProfile(mp=self.mp)
+        profile = self.findByName(name=uplink,api='/api/v1/host-switch-profiles?include_system_owned=true', display=False)
         if not profile:
 
             print( "Can't find uplink profile with name: %s" %uplink)
@@ -5315,6 +6228,7 @@ class TransportNode(Nsx_object):
 
         profiles = []
         profItem={}
+        print("Mapping %s and %s" % (profile['resource_type'], profile['id']))
         profItem['key'] = profile['resource_type']
         profItem['value'] = profile['id']
         profiles.append(profItem)
@@ -5322,8 +6236,8 @@ class TransportNode(Nsx_object):
         #find LLDP profile
         lldpProfile=None
         if lldp:
-            lldpProfile = upprofiles.findByName(name=lldp,display=False)
-            if not lldpProfile:
+            lldpProfile = self.findByName(name=lldp,api='/api/v1/host-switch-profiles?include_system_owned=true', display=False)
+        if not lldpProfile:
                 print ("Can't find the lldp profile with name: %s" %lldp)
                 return
 
@@ -5448,8 +6362,7 @@ class TransportNode(Nsx_object):
         api='/api/v1/transport-nodes/%s' % tn['id']
         return self.mp.put(api=api, data=tn, verbose=True, codes=[200])
 
-                  
-                
+
     def update(self, nodename, nics=[], swname=None, uplink=None, lldp=None,
               ippool=None, vmklist=None, targets=None):
         ''' update TN hsw configuration
@@ -5521,12 +6434,15 @@ class TransportNode(Nsx_object):
                 exit(103)
 
             profiles, pnics, poolProfile = [], None, None
+            upApi='/api/v1/host-switch-profiles?include_system_owned=true'
             if lldp:
-                lldpProf = uppd.findByName(name=lldp, display=False)
+                lldpProf = uppd.findByName(name=lldp, api=upApi, display=False)
                 if lldpProf:
                     profiles.append({ 'key': lldpProf['resource_type'], 'value': lldpProf['id'] })
             if uplink:
-                ulProf = uppd.findByName(name=uplink, display=False)
+                ulProf = uppd.findByName(name=uplink,
+                                         api=upApi,
+                                         display=False)
                 if ulProf:
                     profiles.append({ 'key': ulProf['resource_type'], 'value': ulProf['id'] })
                     if nics:
@@ -5534,7 +6450,7 @@ class TransportNode(Nsx_object):
             if ippool:
                 ipp = IpPool(mp=self.mp).findByName(ippool, display=False)
                 if ipp:
-                    poolProfile = ipp['id']
+                    poolProfile = IpPool(mp=self.mp).getPoolId(name=ippool)
 
             hsw = HostSwitch(mp=self.mp,name=swname, pnics=pnics,
                              profiles=profiles, ippool=poolProfile)
@@ -5576,6 +6492,7 @@ class TransportNode(Nsx_object):
             return False
 
         uapi = '/api/v1/transport-nodes/%s/node/users' %tn['id']
+        print(uapi)
         user = self.findByName(name=username, field='username',
                                api=uapi, display=False)
         if not user:
@@ -5595,7 +6512,7 @@ class TransportNode(Nsx_object):
 class TNProfile(Nsx_object):
     def __init__(self, mp):
         super(self.__class__, self).__init__(mp=mp)
-        self.listApi='/api/v1/transport-node-profiles'
+        self.listApi='/policy/api/v1/infra/host-transport-node-profiles'
         
     def __validateUplinks(self, names, nameList):
 
@@ -5616,6 +6533,8 @@ class TNProfile(Nsx_object):
                hswname,
                tz,
                lldp,
+               ha,
+               dvsUplinks=None,
                vmks=None, vmknets=None,
                vmkuninstall=None, vmkuninstnets=None,
                pnicuninstalls=True,
@@ -5632,6 +6551,8 @@ class TNProfile(Nsx_object):
         uplinks - list of pNICs
         uplinknames - list of uplinks for mapping in order of "uplinks", must match
                       names in uplinkprofile
+        dvsUplinks - must match length of uplinknames, will map uplinks to dvsUplink
+                     names in order specified
         vmks - list of vmkernel interfaces to migrate to NSX VLAN logical switches
         vmknets - list of NSX VLAN logical switches, order must match vmks order
         vmkuninstall - list of vmkernel interfaces to migrate out of NVDS at uninstall
@@ -5640,13 +6561,20 @@ class TNProfile(Nsx_object):
         hswname - name of the NVDS host switch
         tz - list of transport zone names
         lldp - Name of LLDP profile
+        ha - Name of TEP HA Profile
         ippool - Name of IpPool to use, DHCP if this is None
         '''
 
-        data = {}
+        tnp = self.findByName(name=name, display=False)
+        if tnp:
+            data=tnp
+            api='/policy/api/v1%s' % data['path']
+        else:
+            data = {}
+            api='/policy/api/v1/infra/host-transport-node-profiles/%s' %name
             
         data['display_name'] = name
-        data['resource_type'] = 'TransportNodeProfile'
+        data['resource_type'] = 'PolicyHostTransportNodeProfile'
         if desc:
             data['description'] = desc
 
@@ -5656,8 +6584,10 @@ class TNProfile(Nsx_object):
                                            uplinkprofile=uplinkprofile,
                                            pnics=pnics,
                                            uplinknames=uplinknames,
+                                           dvsUplinks=dvsUplinks,
                                            vmks=vmks,
                                            lldp=lldp,
+                                           ha=ha,
                                            vmknets=vmknets,
                                            vmkuninstall=vmkuninstall,
                                            vmkuninstnets=vmkuninstnets,
@@ -5691,11 +6621,13 @@ class TNProfile(Nsx_object):
         #    print("Host switch name %s not found in any of listed TZs" %hswname)
         #    return None
         
-        api='/api/v1/transport-node-profiles'
-        r = self.mp.post(api=api,data=data,verbose=True, codes=[201])
+
+        r = self.mp.put(api=api,data=data,verbose=True, codes=[200])
 
     def __configSwitchSpec(self, data, hswname,
                            uplinkprofile, pnics, uplinknames, tz, lldp=None,
+                           ha=None,
+                           dvsUplinks=None,
                            vmks=None, vmknets=None,
                            vmkuninstall=None, vmkuninstnets=None,
                            pnicuninstalls=True, vds=None, swtype="NVDS",
@@ -5709,6 +6641,8 @@ class TNProfile(Nsx_object):
         uplinks - list of pNICs
         uplinknames - list of uplinks for mapping in order of "uplinks", must match
                       names in uplinkprofile
+        dvsUplinks - if provided, must match uplinknames count.  Will map uplinknames
+                     to dvsUplinks in order specified.
         vmks - list of vmkernel interfaces to migrate to NSX VLAN logical switches
         vmknets - list of NSX VLAN logical switches, order must match vmks order
         vmkuninstall - list of vmkernel interfaces to migrate out of NVDS at uninstall
@@ -5724,8 +6658,8 @@ class TNProfile(Nsx_object):
                 data['ip_assignment_spec'] = {'resource_type': 'AssignedByDhcp'}
         else:
             P = IpPool(mp=self.mp)
-            pid = P.getPoolId(name=ippool, display=False)
-            print(pid)
+            #pid = P.getPoolId(name=ippool, display=False)
+            pid = P.getPathByName(name=ippool, display=False)
             if not pid:
                 print("IP Pool %s not found" %ippool)
                 return None
@@ -5738,12 +6672,13 @@ class TNProfile(Nsx_object):
             data['transport_zone_endpoints'] = []
             for n in tz:
                 T=TransportZone(mp=self.mp)
+                #t = T.findByName(name=n, api='/api/v1/transport-zones', display=False)
                 t = T.findByName(name=n, display=False)
                 if not t:
                     print("TransportZone %s not found" %n)
                     return None
                 else:
-                    data['transport_zone_endpoints'].append({'transport_zone_id':t['id']})
+                    data['transport_zone_endpoints'].append({'transport_zone_id':t['path']})
         if lldp:
             U = HostSwitchProfile(mp=self.mp)
             u = U.findByName(name=lldp,display=False)
@@ -5751,24 +6686,51 @@ class TNProfile(Nsx_object):
                 print("LLDP UplinkProfile %s not found" %lldp)
                 return None
             if 'host_switch_profile_ids' not in data.keys():
-                data['host_switch_profile_ids'] = [{'key':u['resource_type'], 'value': u['id']}]
+                data['host_switch_profile_ids'] = [{'key':u['resource_type'].replace('Policy', ''),
+                                                    'value': u['path']}]
             else:
                 found=False
                 for p in data['host_switch_profile_ids']:
-                    if p['value'] == u['id']:
+                    if p['value'] == u['path']:
                         found = True
                         break
                     else:
                         tu = U.findById(id=p['value'], display=False)
-                        if tu and tu['resource_type'] == u['resource_type']:
-                            p['value'] = u['id']
+                        if tu and tu['resource_type'].replace('Policy','') == u['resource_type'].replace('Policy',''):
+                            p['value'] = u['path']
                             found=True
                             break
                             
                 if not found:
-                    data['host_switch_profile_ids'].append({'key':u['resource_type'],
-                                                            'value':u['id']})
+                    data['host_switch_profile_ids'].append({'key':u['resource_type'].replace('Policy',''),
+                                                            'value':u['path']})
+        if ha:
+            U = HostSwitchProfile(mp=self.mp)
+            u = U.findByName(name=ha, display=False)
+            if not u:
+                print("HA profile %s not found" %ha)
+                return None
 
+            if 'host_switch_profile_ids' not in data.keys():
+                data['host_switch_profile_ids'] = [{'key': u['resource_type'].replace('Policy', ''),
+                                                   'value':u['path']}]
+            else:
+                found=False
+                for p in data['host_switch_profile_ids']:
+                    if p['value'] == u['path']:
+                        found = True
+                        break
+                    else:
+                        tu = U.findById(id=p['value'], display=False)
+                        if tu and tu['resource_type'].replace('Policy','') == u['resource_type'].replace('Policy',''):
+                            p['value'] = u['path']
+                            found=True
+                            break
+                            
+                if not found:
+                    data['host_switch_profile_ids'].append({'key':u['resource_type'].replace('Policy',''),
+                                                            'value':u['path']})
+                
         if uplinkprofile:
             U = HostSwitchProfile(mp=self.mp)
             u = U.findByName(name=uplinkprofile,display=False)
@@ -5776,23 +6738,24 @@ class TNProfile(Nsx_object):
                 print("UplinkProfile %s not found" %uplinkprofile)
                 return None
             if 'host_switch_profile_ids' not in data.keys():
-                data['host_switch_profile_ids'] = [{'key':u['resource_type'], 'value': u['id']}]
+                data['host_switch_profile_ids'] = [{'key':u['resource_type'].replace('Policy',''),
+                                                    'value': u['path']}]
             else:
                 found=False
                 for p in data['host_switch_profile_ids']:
-                    if p['value'] == u['id']:
+                    if p['value'] == u['path']:
                         found = True
                         break
                     else:
                         tu = U.findById(id=p['value'], display=False)
-                        if tu and tu['resource_type'] == u['resource_type']:
-                            p['value'] = u['id']
+                        if tu and tu['resource_type'].replace('Policy','') == u['resource_type'].replace('Policy',''):
+                            p['value'] = u['path']
                             found=True
                             break
                             
                 if not found:
-                    data['host_switch_profile_ids'].append({'key':u['resource_type'],
-                                                            'value':u['id']})
+                    data['host_switch_profile_ids'].append({'key':u['resource_type'].replace('Policy',''),
+                                                            'value':u['path']})
                 
 
 
@@ -5806,9 +6769,8 @@ class TNProfile(Nsx_object):
             print(" Uplink profile link names: %s" %l)
             return None
 
-        
         if not (len(pnics)  <= len(uplinknames)):
-            print("The number of PNICs must be equal to or less than the number of profile uplinks")
+            print("The number of PNICs must be equal to or less than the number of profile uplink3240s")
             return None
 
         data['host_switch_mode'] = mode
@@ -5829,9 +6791,21 @@ class TNProfile(Nsx_object):
                 return None
             data['host_switch_id'] = v['uuid']
             data['uplinks'] = []
-            for i,j in zip(uplinknames, v['uplink_port_names']):
-                data['uplinks'].append({'uplink_name': i, 'vds_uplink_name': j})
-
+            if not dvsUplinks:
+                for i,j in zip(uplinknames, v['uplink_port_names']):
+                    data['uplinks'].append({'uplink_name': i, 'vds_uplink_name': j})
+            else:
+                if len(uplinknames) != len(dvsUplinks):
+                    print("Number of dvsUplinks %d is not the same as uplinknames: %d" %
+                          (len(dvsUplinks), len(uplinknames)))
+                    return None
+                for n in range(0,len(uplinknames)):
+                    if dvsUplinks[n] not in v['uplink_port_names']:
+                        print("Did not find dvsUplink '%s' in DVS uplink list: %s" %
+                              (dvsUplinks[n], v['uplink_port_names']))
+                        return None
+                    data['uplinks'].append({'uplink_name': uplinknames[n],
+                                            'vds_uplink_name': dvsUplinks[n]})
         if vmks:
             if len(vmks) != len(vmknets):
                 print("The number of vmknets must be equal the number of vmks to be migrated")
@@ -5867,7 +6841,7 @@ class HostSwitchProfile(Nsx_object):
     def __init__(self, mp):
         super(self.__class__, self).__init__(mp=mp)
         self.listApi='/api/v1/host-switch-profiles?include_system_owned=true'
-
+        self.listApi='/policy/api/v1/infra/host-switch-profiles'
 
     def configUplinkHostSwitchProfile(self, name, uplinktype,
                                       active, policy, standby=None,
@@ -5876,6 +6850,7 @@ class HostSwitchProfile(Nsx_object):
                                       laglb="SRCDESTIPVLAN",
                                       laglinks=2,
                                       lagtimeout="SLOW",
+                                      overlay="GENEVE",
                                       desc=None):
         '''
         @name Display name for the uplink profile
@@ -5892,7 +6867,7 @@ class HostSwitchProfile(Nsx_object):
         else:
             data={}
             
-        data['resource_type'] = 'UplinkHostSwitchProfile'
+        data['resource_type'] = 'PolicyUplinkHostSwitchProfile'
         data['display_name'] = name
         if desc:
             data['description'] = desc
@@ -5900,7 +6875,9 @@ class HostSwitchProfile(Nsx_object):
             data['mtu'] = mtu
         if vlan:
             data['transport_vlan'] = vlan
-            
+
+        data['overlay_encap']=overlay
+        
         
         if uplinktype.lower()=="lag":
             lag={}
@@ -5987,11 +6964,13 @@ class HostSwitchProfile(Nsx_object):
                             
                         
         if found:
-            api='/api/v1/host-switch-profiles/%s' % data['id']
-            return self.mp.put(api=api,data=data,verbose=True,codes=[200])
+            #api='/api/v1/host-switch-profiles/%s' % data['id']
+            api='/policy/api/v1%s' %data['path']
+            return self.mp.patch(api=api,data=data,verbose=True,codes=[200])
         else:
-            api='/api/v1/host-switch-profiles'
-            return self.mp.post(api=api,data=data,verbose=True,codes=[201])
+            #api='/api/v1/host-switch-profiles'
+            api='/policy/api/v1/infra/host-switch-profiles/%s' %name
+            return self.mp.patch(api=api,data=data,verbose=True,codes=[201])
 
     def activeUplinks(self,name,obj=None,display=True):
         if not obj:
@@ -6035,7 +7014,7 @@ class HostSwitchProfile(Nsx_object):
         return links
                 
             
-    def configLldpProfile(self, name, lldp, display=True):
+    def configLldpProfile(self, name, lldp, desc=None, display=True):
         found = self.findByName(name=name, display=False)
         if found:
             data=found
@@ -6043,15 +7022,48 @@ class HostSwitchProfile(Nsx_object):
             data={}
 
         data['display_name'] = name
+        if desc:
+            data['description'] = desc
         data['send_enabled'] = lldp
-        data['resource_type'] = 'LldpHostSwitchProfile'
+        data['resource_type'] = 'PolicyLldpHostSwitchProfile'
         if found:
-            api='/api/v1/host-switch-profiles/%s' % data['id']
-            self.mp.put(api=api, data=data, verbose=True, codes=[200])
+            #api='/api/v1/host-switch-profiles/%s' % data['id']
+            api='/policy/api/v1%s' % data['path']
+            self.mp.patch(api=api, data=data, verbose=True, codes=[200])
         else:
-            api='/api/v1/host-switch-profiles'
-            self.mp.post(api=api,data=data,verbose=True,codes=[201])
-            
+            #api='/api/v1/host-switch-profiles'
+            api='/policy/api/v1/infra/host-switch-profiles/%s' % name
+            self.mp.patch(api=api,data=data,verbose=True,codes=[200])
+
+    def configTepHAProfile(self, name, recovery, wait, backoff, enabled, timeout, desc=None):
+        found = self.findByName(name=name, display=False)
+        if found:
+            data=found
+            if data['resource_type'] != 'PolicyVtepHAHostSwitchProfile':
+                print("Found existing profile %s that is not a TEP HA profile" % name)
+                return
+        else:
+            data={}
+            data['resource_type'] = 'PolicyVtepHAHostSwitchProfile'
+
+        data['display_name'] = name
+        if desc:
+            data['description'] = desc
+
+        data['auto_recovery'] = recovery
+        data['auto_recovery_initial_wait'] = wait
+        data['auto_recovery_max_backoff'] = backoff
+        data['enabled'] = enabled
+        data['failover_timeout'] = timeout
+        if found:
+            api = '/policy/api/v1%s' %data['path']
+        else:
+            api= '/policy/api/v1/infra/host-switch-profiles/%s' % name
+        self.mp.patch(api=api, data=data, verbose=True, codes=[200])
+        
+        
+        
+        
 class License(Nsx_object):
     def __init__(self, mp):
         super(self.__class__, self).__init__(mp=mp)
@@ -6309,23 +7321,349 @@ class Migration(Nsx_object):
         r = self.mp.post(api=api, data=data, verbose=True, codes=[200])
         
                          
+class Search(Nsx_object):            
+    def __init__(self, mp):
+        super(self.__class__, self).__init__(mp=mp)
+
+
+    def query(self, query, mp=False):
+        if not mp:
+            api="/policy/api/v1/search/query?query=%s" % query
+        else:
+            api="/api/v1/search/query?query=%s" % query
+
+
+        r = self.mp.get(api=api, verbose=True,display=True, codes=[200])
+
+        
+class Mirror(Nsx_object):
+    def __init__(self, mp):
+        super(self.__class__, self).__init__(mp=mp)
+        self.listApi="/policy/api/v1/infra/port-mirroring-profiles"
+
+    def listMp(self, display=True):
+        self.list(api='/api/v1/mirror-sessions', display=display)
+        
+    def createProfile(self, name, encap, direction, destination,
+                      stack, snap, spantype, erspanId=0, grekey=0,desc=None):
+
+        data={}
+        data['display_name'] = name
+        if desc:
+            data['description'] = desc
+        data['encapsulation_type'] = encap
+        data['erspan_id'] = erspanId
+        data['gre_key'] = 0
+        data['profile_type'] = spantype
+        data['tcp_ip_stack'] = stack
+        data['snap_length'] = snap
+        data['direction'] = direction
+        G = Group(mp=self.mp)
+        grp = G.findByName(name=destination, display=False)
+        if not grp:
+            print("Destination group %s not found" % destination)
+            return
+        data['destination_group'] = grp['path']
+
+        api='/policy/api/v1/infra/port-mirroring-profiles/%s' %name
+        self.mp.patch(api=api, data=data, verbose=True)
+        
+    def configMpMirror(self, direction, vlan, destination, source, mfilter, sourcetype,
+                       destinationtype, sessiontype,
+                       snap, stack='Default', preserveVlan=False, desc=None):
+        data={}
+        data['display_name'] = name
+        if desc:
+            data['description'] = desc
+        # type can be this can be:
+        #  LogicalPortMirrorSession
+        #  - source[LogicalPortMirrorSource] destination[LogicalPortMirrorDestination]
+        #  UplinkPortMirrorSession
+        #  - source[PnicMirrorSource] destination[LogicalPortMirrorDestination]
+        # RspanSrcMirrorSession
+        # - source[LogicalPortMirrorSource] destination[PnicMirrorDestination]
+        # RspanDstMirrorSession
+        # - source[VlanMirrorSource] destination[LogicalPortMirrorDestination]
+        # LogicalLocalPortMirrorSession
+        # - source[LogicalPortMirrorSource] destination[LogicalPortMirrorDestination]
+        # L3PortMirrorSession
+        # - source[LogicalPortMirrorSource or LogicalSwitchMirrorSource] destination[IPMirrorDestination]
+        data['session_type'] = sessiontype
+        if sessiontype in ['LogicalPortMirrorSession', 'RspanSrcMirrorSession',
+                           'LogicalLocalPortMirrorSession', 'L3PortMirrorSession']:
+            pass
+
+        
+class CentralConfig(Nsx_object):
+    def __init__(self, mp):
+        super(self.__class__, self).__init__(mp=mp)
+        self.listApi="/api/v1/configs/central-config/node-config-profiles"
+        # currently, there's a system created config that needs to be re-used
+        # so listing should contain an array of 1
+        self.id = self.getId()
+        self.api="%s/%s" %(self.listApi, self.id)
+    def getId(self):
+        cfg = self.list(display=None)['results'][0]
+        return cfg['id']
+
+    def getConfig(self):
+        return self.list(display=None)['results'][0]
+    
+    def setupNtp(self, servers, tz=None):
+        cfg=self.getConfig()
+        if not servers:
+            if 'ntp' in cfg.keys():
+                del cfg['ntp']
+        else:
+            cfg['ntp'] = {}
+            cfg['ntp']['servers'] = servers
+        if tz:
+            cfg['timezone'] = tz
+        self.mp.put(api=self.api, data=cfg, verbose=True, codes=[200])
+
+    def setupSyslog(self, action, server, protocol="UDP", port=514, level="INFO"):
+        # action can be add/update or delete
+        cfg=self.getConfig()
+        if action.lower() in ['update', 'add']:
+            if not 'syslog' in cfg.keys():
+                action = 'add'
+                cfg['syslog'] = {}
+            logger  = {}
+            logger['max_log_level'] = level
+            logger['port'] = port
+            logger['protocol'] = protocol
+            logger['server'] = server
+            if action.lower() == 'add':
+                if 'exporters' in cfg['syslog'].keys():
+                    cfg['syslog']['exporters'].append(logger)
+                else:
+                    cfg['syslog']['exporters'] = [logger]
+            else:
+                found=False
+                for i in range(0, len(cfg['syslog']['exporters'])):
+                    if cfg['syslog']['exporters'][i]['server'] == server:
+                        cfg['syslog']['exporters'][i] = logger
+                        found=True
+                        break
+                if not found:
+                    cfg['syslog']['exporters'].append(logger)
+        else:
+            print(cfg['syslog']['exporters'])
+            logs = cfg['syslog']['exporters']
+            for i in range(0, len(logs)):
+                if logs[i]['server'] == server:
+                    logs.pop(i)
+                    break
+        self.mp.put(api=self.api, data=cfg, verbose=True, codes=[200])
+        
+                    
+                    
+                        
+                
+
             
             
+class Alarms(Nsx_object):
+    def __init__(self, mp):
+        super(self.__class__, self).__init__(mp=mp)
+        self.listApi="/api/v1/alarms"
+
+    def getAlarms(self, status):
+        api="%s?status=%s" %(self.listApi, status)
+        return self.list(api=api)
+    
         
             
-               
-               
-    
-    
-    
-            
-    
+class NappMetric(Nsx_object):
+    def __init__(self, mp):
+        super(self.__class__, self).__init__(mp=mp)
+
+    def getHealth(self, verbose=True):
+        api='/napp/api/v1/platform/monitor/feature/health'
+        r = self.mp.get(api=api, verbose=verbose, codes=[200])
+        if verbose:
+            self.jsonPrint(r)
+                        
+    def getResourceTypes(self, display=False):
+        api='/napp/api/v1/metrics/key-info?resource_type='
+        r = self.mp.get(api=api,verbose=False,codes=[400])
+        data=r['error_message'].split(':')[-1].split(',')
+        for i,v in enumerate(data):
+            data[i]=v.strip()
+            if display:
+                print("\t%s" %data[i])
+        return data
         
-        
-    
-    
+    def getKeys(self, resourceType):
+        rtypes = self.getResourceTypes()
+        if resourceType.lower() not in rtypes:
+            print("Resource type %s not supported" % resourceType)
+            print("Supported types are: ")
+            self.getResourceTypes(display=True)
+            return
             
-            
+        api="/napp/api/v1/metrics/key-info?resource_type=%s" % resourceType
+
+        self.list(api=api)
         
-    
-                   
+
+    def getNappMetric(self, rtype, nodes, keys, gran='m', ctime=True):
+        data={}
+        data['resource_ids'] = []
+        if rtype == 'hosttransportnode':
+            data['resource_type'] = "HostTransportNode"
+            N = TransportNode(mp=self.mp)
+            for n in nodes:
+                h = N.findByName(name=n, display=False)
+                if not h:
+                    print("Host node %s not found" %n)
+                    return None
+                data['resource_ids'].append(h['id'])
+                
+        elif rtype == 'policyedgenode':
+            data['resource_type'] = "PolicyEdgeNode"
+            N = Edge(mp=self.mp)
+            for n in nodes:
+                e = N.findByName(name=n, display=False)
+                if not e:
+                    print("Edge node %s not found" %n)
+                    return None
+                data['resource_ids'].append(e['path'])
+        elif rtype == 'clusternode':
+            data['resource_type'] = 'clusternode'
+            N = Cluster(mp=self.mp)
+            for n in nodes:
+                e = N.findByName(name=n, display=False)
+                if not e:
+                    print("Manager node %s not found" %n)
+                    return None
+                data['resource_ids'].append(e['id'])
+        else:
+            #print("Unsupport rtype: %s" %rtype)
+            #return None
+            data['resource_type'] = rtype
+            found=None
+            data['resource_ids'] = nodes
+                
+
+        if len(data['resource_ids']) == 0 and nodes:
+            print("No host TNs found from list: %s" % str(nodes))
+            return None
+
+        if len(data['resource_ids']) == 0:
+            del data['resource_ids']
+
+        data['aggregation_operation']="AVG"
+        data['keys'] = keys
+        if gran=='m':
+            data['granularity' ] = "FIVE_MINUTES"
+        elif gran=='h':
+            data['granularity'] = "ONE_HOUR"
+        else:
+            data['granularity'] = "ONE_DAY"
+        api='/napp/api/v1/metrics/data'
+        r = self.mp.post(api=api, data=data, verbose=True, codes=[200])
+        if ctime:
+            r = self.convertTimes(r)
+        self.jsonPrint(r)
+
+    def convertTimes(self, data):
+        if not data:
+            return data
+
+        if 'start_time' in data.keys():
+            data['start_time'] = str(data['start_time']) + " <-- %s" %datetime.fromtimestamp(data['start_time'])
+        if 'end_time' in data.keys():
+            data['end_time'] = str(data['end_time']) + " <-- %s" %datetime.fromtimestamp(data['end_time'])
+        if not 'results' in data.keys():
+            return data
+        for mr in data['results']:
+            for k in mr['key_results']:
+                for r in k['results']:
+                    for d in r['data']:
+                        if 'time' in d.keys():
+                            d['time'] = str(d['time']) + " <-- %s" %datetime.fromtimestamp(d['time'])
+        return data
+        
+    def getEdgeDpInt(self, names, keys):
+        E = Edge(mp=self.mp)
+        data = {}
+        data['resource_ids'] = []
+        for n in names:
+            en = E.findByName(name=n, display=False)
+            if not en:
+                print("Edge node %s not found, skipping" %n)
+                continue
+            data['resource_ids'].append(en['path'])
+
+        if len(data['resource_ids']) == 0:
+            print("No edge nodes found from list: %s" % str(names))
+            return
+
+        data['aggregate_operation'] = "AVG"
+        data['resource_type'] = "PolicyEdgeNode"
+        data['keys'] = []
+        for k in keys:
+            data['keys'].append("edge_dp_phy_intf." + k)
+
+        #data['empty_value_config'] = 'EMPTY_VALUE_AS_NULL'
+        # FIVE_MINUTES, ONE_HOUR, ONE_DAY
+        data['granularity'] = "FIVE_MINUTES"
+        api='/napp/api/v1/metrics/data'
+        self.jsonPrint(data)
+        r = self.mp.post(api=api, data=data, verbose=True, codes=[200])
+        self.jsonPrint(r)
+
+
+    def getMpLoadAvg(self):
+        pass
+
+
+class EdgeBridgeProfile(Nsx_object):
+    def __init__(self, mp):
+        super(self.__class__, self).__init__(mp=mp)
+        self.listApi='/policy/api/v1/search/query?query=resource_type:L2BridgeEndpointProfile'
+
+    def config(self, name, pEdge, sEdge=None, failover_mode='NON_PREEMPTIVE', site='default', ep='default'):
+        api='/policy/api/v1/infra/sites/%s/enforcement-points/%s/edge-bridge-profiles' % (site,ep)
+        p = self.getPathByName(name=name, api=api, display=False)
+        if p:
+            api='/policy/api/v1'+p
+            data=self.findByName(name=name, display=True)
+        else:
+            api=api+'/%s' % name
+            data={}
+
+        data['display_name'] = name
+        data['failover_mode'] = failover_mode
+        data['edge_paths'] = []
+        edge=Edge(mp=self.mp)
+        edgeList = edge.list(display=False)
+        t = edge.findByName(name=pEdge, data=edgeList, display=False)
+        if not t:
+            print("Edge %s not found" % pEdge)
+            return False
+        print(t['path'])
+        data['edge_paths'].append(t['path'])
+        if sEdge:
+            t = edge.findByName(name=sEdge, data=edgeList, display=False)
+            if not t:
+                print("Edge %s not found" % sEdge)
+                return False
+            data['edge_paths'].append(t['path'])
+        self.mp.patch(api=api,data=data,codes=[200])
+
+class DistributedIDS(Nsx_object):
+    def __init__(self, mp):
+        super(self.__class__, self).__init__(mp=mp)
+        self.listApi = '/policy/api/v1/infra/domains/%s/intrusion-service-policies' % self.domain
+
+    def rules(self, policy, display=True):
+        policyPath=self.getPathByName(name=policy)
+        if not policyPath:
+            print("Policy %s not found")
+            return
+
+        api='/policy/api/v1%s/rules' % policyPath
+
+        self.list(api=api,display=display)

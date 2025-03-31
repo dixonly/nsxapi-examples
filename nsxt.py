@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import pinit
 import getpass
 import json
 import argparse
@@ -30,6 +29,10 @@ def parseParameters():
                         help="Use global infra for LM")
     parser.add_argument('-m', '--global_gm', action='store_true',
                         help="Talk talk to Global Manager")
+    parser.add_argument('--org', default='default',
+                        help="Org name for VPC, default is 'default'")
+    parser.add_argument('--project', required=False, default=None,
+                        help="Project name for VPC, default is None")
 
     #subparsers is the NameSpace for all first level commands
     subparsers = parser.add_subparsers(dest='ns', required=True)
@@ -71,7 +74,11 @@ def parseParameters():
     cluster_parser.add_argument('--oldpasswd', required=True)
     cluster_parser.add_argument('--newpasswd', required=True)
     
-    
+
+    cluster_parser = clusterNs.add_parser('ssh')
+    cluster_parser.add_argument("--node", required=True)
+    cluster_parser.add_argument("--action", choices=['start', 'stop', 'restart'],
+                                required=True)
     cluster_parser = clusterNs.add_parser('vip')
     cluster_vipns = cluster_parser.add_subparsers(dest='clustervip', required=True)
     cluster_vipns_parser = cluster_vipns.add_parser('get')
@@ -216,7 +223,53 @@ def parseParameters():
     edg = edgeNs.add_parser('rteps')
     edg.add_argument('--names', required=False, nargs="*")
     
+    edg = edgeNs.add_parser("getRingSize")
+    edg.add_argument("--name", required=True,
+                     help="Name of the Edge TN")
+    edg = edgeNs.add_parser("setRingSize")
+    edg.add_argument("--name", required=True,
+                     help="Name of the Edge TN")
+    edg.add_argument("--tx", action='store_true',
+                      help="Set TX ring Size")
+    edg.add_argument("--rx", action='store_true',
+                      help="Set RX ring Size")
+    edg.add_argument("--size", type=int,
+                     required=True,
+                     help="Ring Size in bytes")
+
+    edg = edgeNs.add_parser('fc')
+    edgeFcNs = edg.add_subparsers(dest='edgefc', required=True)
+    edgeFc = edgeFcNs.add_parser('get')
+    edgeFc.add_argument("--name", required=True)
+    edgeFc = edgeFcNs.add_parser('set')
+    edgeFc.add_argument("--name", required=True)
+    edgeFc.add_argument("--enable",
+                        action='store_true')
+    edgeFc.add_argument("--disable", 
+                        action='store_true')
+                        
     
+    edgeDpSpace = edgeNs.add_parser('dataplane')
+    edgeDpNs = edgeDpSpace.add_subparsers(dest='edgedp', required=True)
+    edgeDp = edgeDpNs.add_parser('get')
+    edgeDp.add_argument("--name", required=True)
+    edgeDp = edgeDpNs.add_parser('stop')
+    edgeDp.add_argument("--name", required=True)
+    edgeDp = edgeDpNs.add_parser('start')
+    edgeDp.add_argument("--name", required=True)
+    edgeDp = edgeDpNs.add_parser('restart')
+    edgeDp.add_argument("--name", required=True)
+    
+    edgeSshSpace = edgeNs.add_parser('ssh')
+    edgeSshNs = edgeSshSpace.add_subparsers(dest='edgessh', required=True)
+    edgeSsh = edgeSshNs.add_parser('stop')
+    edgeSsh.add_argument("--name", required=True)
+    edgeSsh = edgeSshNs.add_parser('start')
+    edgeSsh.add_argument("--name", required=True)
+    edgeSsh = edgeSshNs.add_parser('restart')
+    edgeSsh.add_argument("--name", required=True)
+    
+
     edg = edgeNs.add_parser("deploy")
     edg.add_argument("--name", required=True)
     edg.add_argument("--size", required=False,
@@ -254,15 +307,28 @@ def parseParameters():
     edg.add_argument("--fpe0", required=True)
     edg.add_argument("--fpe1", required=True)
     edg.add_argument("--fpe2", required=True)
+    edg.add_argument("--fpe3", required=False)
     edg.add_argument("--mgmtNet", required=True)
     edg.add_argument("--gateway", nargs="+", required=True)
     edg.add_argument("--mgmtIp", required=True)
     edg.add_argument("--mgmtMask", required=True)
+    edg.add_argument("--mgmtIp6", required=False)
+    edg.add_argument("--mgmtMask6", required=False)
     edg.add_argument("--uplinkprofile", required=True)
     edg.add_argument("--nics", nargs="+", required=True)
     edg.add_argument("--ippool", required=True)
+    edg.add_argument("--uplinkprofile2", required=False)
+    edg.add_argument("--nics2", nargs="+", required=False)
+    edg.add_argument("--ippool2", required=False)
+    edg.add_argument("--tz2", nargs="+", required=False)
+    
+    
+    edg = edgeNs.add_parser('redeploy')
+    edg.add_argument("--name", required=True)
+    edg.add_argument("--removeHost", required=False,
+                     action='store_true',
+                     help="Clear host deployment config if exist")
 
-                     
     edg = edgeNs.add_parser('inter-site')
     esiteNs = edg.add_subparsers(dest='inter-site', required=True)
     esite = esiteNs.add_parser('bgpNeighbors')
@@ -402,12 +468,17 @@ def parseParameters():
                             help="One or more pnics to map")
     tnp_parser.add_argument('--uplinknames', nargs='*',
                             help="One or more uplink names to map pnics, names should match uplink profile names")
+    tnp_parser.add_argument('--dvsUplinks', nargs='*',
+                            required=False,
+                            help="DVS Uplink names to map to uplinknames in order")
     tnp_parser.add_argument('--hswname',
                             help='Name of the NVDS host switch')
     tnp_parser.add_argument('--lldp',
                             help='Name of the LLDP profile')
+    tnp_parser.add_argument('--ha',
+                            help="Name of TEP HA Profile")
     tnp_parser.add_argument('--mode',default='STANDARD',
-                            choices=['STANDARD', 'ENS', 'ENS_INTERRRUPT'],
+                            choices=['STANDARD', 'ENS', 'ENS_INTERRUPT'],
                             help="Switch mode type")
     tnp_parser.add_argument('--swtype', default="NVS",
                             choices=['NVDS', 'VDS'],
@@ -467,6 +538,21 @@ def parseParameters():
                          help="Enforcement point name, default is default")
     '''
     '''
+
+    tzProfileSpace = subparsers.add_parser('tzprofile')
+    tzProfileNs = tzProfileSpace.add_subparsers(dest='tzprofile', required=True)
+    createCommonParsers(parser=tzProfileNs, names=['list', 'find', 'delete', 'path'])
+    tzp = tzProfileNs.add_parser('config')
+    tzp.add_argument('--name', required=True)
+    tzp.add_argument('--desc', default=None, required=False)
+    tzp.add_argument('--latency', action='store_true',
+                     help="Enable latency reporting")
+    tzp.add_argument('--interval', required=False, type=int,
+                     default=1000,
+                     help="BFD Probe interval in milliseconds, default 1000")
+                        
+    '''
+    '''
     tzSpace = subparsers.add_parser('tz')
     tzNs = tzSpace.add_subparsers(dest='tz', required=True)
     createCommonParsers(parser=tzNs,
@@ -474,17 +560,26 @@ def parseParameters():
     tz_parser = tzNs.add_parser('config')
     tz_parser.add_argument('--name', required=True,
                                 help="Name for the transport-zone")
+    tz_parser.add_argument('--tztype', required=False,
+                           default="OVERLAY_STANDARD",
+                           choices=["OVERLAY_BACKED", "VLAN_BACKED",
+                                    "OVERLAY_STANDARD", "OVERLAY_ENS",
+                                    "UNKNOWN"],
+                           help="Impactor doc says OVERLAY_STANDARD/ENS are deprecated, but UI uses OVERLAY_STANDARD, this will default to OVERLAY_STANDARD instead")
+    
+                           
     tz_parser.add_argument('--desc', default=None, 
                                 help="Description for the transport-zone")
     tz_parser.add_argument('--teaming', default=None, nargs="*",
                            help="Named teaming policy names")
-    tz_parser.add_argument('--hswname', required=False,
-                                help="N-VDS name for the transport-zone")
-    tz_parser.add_argument('--type', required=False,default='OVERLAY',
-                                help="Type for the transport-zone. [OVERLAY|VLAN] Default=OVERLAY")
+
     tz_parser.add_argument('--isdefault', required=False,
                            action='store_true',
                            help="Set this to TZ to be default")
+    tz_parser.add_argument('--tzprofiles', required=False, nargs="*",
+                           help="Transport Zone Profile names")
+    tz_parser.add_argument('--nested', action='store_true',
+                           help="Set nested mode to true")
     tz_parser = tzNs.add_parser('nested')
     tz_parser.add_argument('--name', required=True,
                          help="Name of the TZ")
@@ -569,6 +664,29 @@ def parseParameters():
     seg_parser.add_argument('--force', action='store_true',
                             help="Force is required if updating segments that may impact connectivity")
 
+    seg_parser = segmentNs.add_parser('setEdgeBridgeProfile')
+    seg_parser.add_argument('--name', required=True)
+    seg_parser.add_argument('--tz', required=True,help="Name of Bridge VLAN TZ")
+    seg_parser.add_argument('--bProfile', required=True,
+                            help="Name of the bridge profile")
+    seg_parser.add_argument('--vlans', required=True, nargs='*', help="List of vlans")
+
+    seg_parser = segmentNs.add_parser('deleteEdgeBridgeProfile')
+    seg_parser.add_argument('--name', required=True)
+    seg_parser.add_argument('--bProfile', required=True,
+                            help="Name of the bridge profile")
+
+    seg_parser = segmentNs.add_parser('getBridgeStats')
+    seg_parser.add_argument('--name', required=True)
+    seg_parser.add_argument('--bProfile', required=True,
+                            help="Name of the bridge profile")
+
+    seg_parser = segmentNs.add_parser('getBridgePortUUID')
+    seg_parser.add_argument('--name', required=True)
+    seg_parser.add_argument('--bProfile', required=True,
+                            help="Name of the bridge profile")
+
+
     seg_parser = segmentNs.add_parser('tagSegment')
     seg_parser.add_argument('--name', required=True,
                             help="Name of the segment")
@@ -616,6 +734,8 @@ def parseParameters():
                              help="Name of port")
     port_parser.add_argument('--vif', default=None,
                              help="Set the VIF ID")
+    port_parser.add_argument('--unblocked', action='store_true',
+                             help="Create VLAN port in unblocked state")
     port_parser.add_argument('--tags', default=None, nargs='*',
                              help="Tags in format of scope:tag-value")
 
@@ -649,21 +769,20 @@ def parseParameters():
                             help="Policy ID of the Tier0 router")
     pfx_parser.add_argument('--name',
                             required=True,
-                            help="Prefix list name")
+                            help="Prefix list na-me")
     pfx_parser.add_argument("--prefix",
                             required=True,
                             nargs="*",
                             help="List of prefixes, format: CIDR,GE,LE,ACTION, \
                             GE and LE can be blank, ACTION must be PERMIT/DENY")
     pfx_parser.add_argument('--desc', default=None)
-    
+
+    '''
     pfx_parser = pfxNs.add_parser('delete')
     pfx_parser.add_argument('--t0',
                             required=True,
                             help="Policy ID of the Tier0 router")
-    pfx_parser.add_argument('--name',
-                            required=True,
-                            help="Prefix list name")
+    '''
     rmapSpace = subparsers.add_parser('routemap')
     rmapNs = rmapSpace.add_subparsers(dest='routemap', required=True)
     createCommonParsers(parser=rmapNs,
@@ -759,7 +878,24 @@ def parseParameters():
                     help="RP Mapping.  Format: RP|range1,range2,.. range in CIDR")
     pp.add_argument('--desc', required=False)
                     
+    edgeBridgeProfileSpace = subparsers.add_parser('edgeBridgeProfile')
+    edgeBridgeProfileNs = edgeBridgeProfileSpace.add_subparsers(dest='edgeBridgeProfile', required=True)
+    createCommonParsers(parser=edgeBridgeProfileNs, names=['list', 'path', 'find', 'realization',
+                                                    'tag', 'delete'])
     
+    bp = edgeBridgeProfileNs.add_parser('config')
+    bp.add_argument('--name', required=True)
+    bp.add_argument('--failover_mode', default='NON_PREEMPTIVE',
+                    help="Specify failover mode. NON_PREEMPTIVE (default) or PREEMPTIVE")
+    bp.add_argument('--pEdge', required=True,
+                    help="Specify the name of the primary edge node")
+    bp.add_argument('--sEdge', default=None,
+                    help="Specify the name of the secondary edge node")
+    bp.add_argument('--site', default='default',
+                    help="Specify the name of the site. DEfault=default")
+    bp.add_argument('--ep', default='default',
+                    help="Specify the name of the endpoint.Default=default")
+
 
     t0Space = subparsers.add_parser('tier0')
     t0Ns = t0Space.add_subparsers(dest='tier0', required=True)
@@ -787,9 +923,22 @@ def parseParameters():
                            help="List of CIDR address for Tier0-Tier1 links")
     t0_parser.add_argument('--dhcprelay', required=False, default=None,
                            help="DHCP relay service name")
+    t0_parser.add_argument('--enableStateful', action='store_true', dest='enableStateful',
+                            required=False, default=None,
+                            help="Enable stateful services for T0 Active-Active router")
+    t0_parser.add_argument('--redirPolicy', required=False, default='IP_HASH',
+                            choices=['IP_HASH', 'NONE'],
+                            help="Redirection policy when stateful services for T0 Active-Active is enabled")
+    t0_parser.add_argument('--disableStateful',  action='store_false', dest='enableStateful',
+                            required=False, default=None,
+                            help="Disable stateful services for T0 Active-Active router")
+    t0_parser.add_argument('--disableFw', required=False,
+                           default=False,action='store_true',
+                           help="Disable gateway firewall")
+    
     t0_parser.add_argument('--desc', required=False, default=None,
                            help="Description of the Tier0")
-    
+
     t0_parser = t0Ns.add_parser('interface')
     t0_intNs = t0_parser.add_subparsers(dest='t0intNs', required=True)
     t0_int = t0_intNs.add_parser('get')
@@ -848,6 +997,43 @@ def parseParameters():
     t0_int.add_argument('--locale', default='default')
     t0_int.add_argument('--name', required=True)
     t0_int.add_argument('--int', required=True)
+
+
+    t0_parser = t0Ns.add_parser('interfaceGroup')
+    t0_intGrpNs = t0_parser.add_subparsers(dest='t0intGrpNs', required=True)
+    t0_intGrp = t0_intGrpNs.add_parser('get')
+    t0_intGrp.add_argument('--name', required=True,
+                        help="Name of the Tier0 router")
+    t0_intGrp.add_argument('--locale', default='default',
+                        help="Locale, default is 'default'")
+    t0_intGrp.add_argument('--intGrp', default=None,
+                        help="Specific interface group name")
+        
+    t0_intGrp = t0_intGrpNs.add_parser('config')
+    t0_intGrp.add_argument('--name', required=True,
+                        help="Name of the Tier0 router")
+    t0_intGrp.add_argument('--intGrp', required=True,
+                        help="Interface Group Name, should be unique")
+    t0_intGrp.add_argument('--members', required=False,
+                        nargs="*", default=None,
+                        help="members for interface group, 1 or more interface names")
+    t0_intGrp.add_argument('--snatPools', required=False,
+                        nargs="*",default=None,
+                        help="SNAT pool names for interface group, 1 or more")
+    t0_intGrp.add_argument('--locale', default='default')
+
+    t0_intGrp = t0_intGrpNs.add_parser('delete')
+    t0_intGrp.add_argument('--name', required=True)
+    t0_intGrp.add_argument('--intGrp', required=True)
+    t0_intGrp.add_argument('--locale', default='default')
+    t0_intGrp = t0_intGrpNs.add_parser('status')
+    t0_intGrp.add_argument('--name', required=True)
+    t0_intGrp.add_argument('--intGrp', required=True)
+    t0_intGrp.add_argument('--locale', default='default')
+    t0_intGrp = t0_intGrpNs.add_parser('entities')
+    t0_intGrp.add_argument('--locale', default='default')
+    t0_intGrp.add_argument('--name', required=True)
+    t0_intGrp.add_argument('--intGrp', required=True)
 
     t0_parser = t0Ns.add_parser('nat')
     t0_natNs = t0_parser.add_subparsers(dest='t0natns', required=True)
@@ -1144,6 +1330,10 @@ def parseParameters():
                            help="Name of dhcprelay config")
     t1_parser.add_argument('--standby_relocate', action='store_true',
                            help="Enable Standby Auto Relocation")
+    t1_parser.add_argument('--ha', default='ACTIVE_STANDBY', choices=['ACTIVE_STANDBY','ACTIVE_ACTIVE'],
+                           help="Tier1 HA mode. Note: AA can be used only if connected T0 is AA stateful.")
+    t1_parser.add_argument('--disableFw', action='store_true',
+                           help="Disable Tier1 firewall")
 
     t1_parser = t1Ns.add_parser('pim')
     t1_parser.add_argument('--t1', required=True,
@@ -1215,6 +1405,43 @@ def parseParameters():
                          help="One or more IP addresses")
     t1_intp.add_argument('--mask', required=True,
                          help="Network mask length")
+
+    t1_parser = t1Ns.add_parser('interfaceGroup')
+    t1_intGrpNs = t1_parser.add_subparsers(dest='t1intGrpNs', required=True)
+    t1_intGrp = t1_intGrpNs.add_parser('get')
+    t1_intGrp.add_argument('--name', required=True,
+                        help="Name of the Tier1 router")
+    t1_intGrp.add_argument('--locale', default='default',
+                        help="Locale, default is 'default'")
+    t1_intGrp.add_argument('--intGrp', default=None,
+                        help="Specific interface group name")
+
+    t1_intGrp = t1_intGrpNs.add_parser('config')
+    t1_intGrp.add_argument('--name', required=True,
+                        help="Name of the Tier1 router")
+    t1_intGrp.add_argument('--intGrp', required=True,
+                        help="Interface Group Name, should be unique")
+    t1_intGrp.add_argument('--members', required=False,
+                        nargs="*", default=None,
+                        help="members for interface group, 1 or more interface names")
+    t1_intGrp.add_argument('--snatPools', required=False,
+                        nargs="*",default=None,
+                        help="SNAT pool names for interface group, 1 or more")
+    t1_intGrp.add_argument('--locale', default='default')
+
+    t1_intGrp = t1_intGrpNs.add_parser('delete')
+    t1_intGrp.add_argument('--name', required=True)
+    t1_intGrp.add_argument('--intGrp', required=True)
+    t1_intGrp.add_argument('--locale', default='default')
+    t1_intGrp = t1_intGrpNs.add_parser('status')
+    t1_intGrp.add_argument('--name', required=True)
+    t1_intGrp.add_argument('--intGrp', required=True)
+    t1_intGrp.add_argument('--locale', default='default')
+    t1_intGrp = t1_intGrpNs.add_parser('entities')
+    t1_intGrp.add_argument('--locale', default='default')
+    t1_intGrp.add_argument('--name', required=True)
+    t1_intGrp.add_argument('--intGrp', required=True)
+
 
     t1_parser = t1Ns.add_parser('nat')
     t1_natNs = t1_parser.add_subparsers(dest='t1natns', required=True)
@@ -1298,13 +1525,14 @@ def parseParameters():
     group.add_argument('--domain', default='default',
                        help="Domain.  Default is 'defualt'")
     group.add_argument('--expressions', nargs='+',
-                       help="Group membership expressions list.\n"
-                       "Each expression can be of the form\n"
-                       " conjunction:type:key:operator:value\n"
-                       " -conjunction: AND or OR\n"
-                       " -type: VirtualMachine, IPSet, LogicalPort, LogicalSwitch\n"
-                       " -key: can be Tag for any type\n"
-                       "       can also be Name, OSName, ComputerName for VMs\n"
+                       help="Group membership expressions list."
+                       "Each expression can be of the form"
+                       " conjunction:type:key:operator:value"
+                       " -conjunction: AND or OR"
+                       " -type: VirtualMachine, IPSet, LogicalPort, LogicalSwitch, SegmentPort, Segment"
+                       " -key: can be Tag for any type and"
+                       "       can also be Name, OSName, ComputerName for VMs"
+                       " -operators: EQUALS, CONTAINS, STARTSWITH,ENDSWITH,NOTEQUALS"
                        " -value: value to match")
     group.add_argument('--vm', default=None, nargs='*',
                        help='List of VirtualMachines by ID')
@@ -1314,14 +1542,14 @@ def parseParameters():
                        help='List of IP addresses, each can be a range')
     group.add_argument('--mac', default=None, nargs='*',
                        help='List of MAC addresses')
-    group.add_argument('--ports', default=None, nargs='*',
-                       help="List of Segment Ports by path")
+    #group.add_argument('--ports', default=None, nargs='*',
+    #                   help="List of Segment Ports by path")
     group.add_argument('--segments', default=None, nargs='*',
                        help="List of Segments by path")
     group.add_argument('--nsgroups', default=None, nargs='*',
                        help="List of Policy groups by path")
-    group.add_argument('--tags', default=None, nargs='*',
-                       help="List of tags in format of scope/policy")
+    group.add_argument('--hosts', default=None, nargs='*',
+                       help="List of hosts")
     group=groupNs.add_parser('members')
     group.add_argument('--name', required=True)
     group=groupNs.add_parser('ipaddrs')
@@ -1347,7 +1575,7 @@ def parseParameters():
                              help="Domain for this policy, default is 'default'")
     policyNs = policySpace.add_subparsers(dest='policy', required=True)
     createCommonParsers(parser=policyNs,
-                        names=['list', 'find', 'realization', 'path', "delete", "tag"])
+                        names=['list', 'find', 'realization', 'path', "tag"])
     policy = policyNs.add_parser('config')
     policy.add_argument('--name', required=True,
                         help="Name of the DFW Policy ")
@@ -1403,14 +1631,62 @@ def parseParameters():
     
     polDelete = policyNs.add_parser('delete')
     polDelete.add_argument('--name', required=True)
-                          
+    
+    gwPolicySpace = subparsers.add_parser('gatewayPolicy')
+    gwPolicySpace.add_argument('--domain', default='default',
+                             help="Domain for this policy, default is 'default'")
+    gwPolicyNs = gwPolicySpace.add_subparsers(dest='gatewayPolicy', required=True)
+    createCommonParsers(parser=gwPolicyNs,
+                        names=['list', 'find', 'realization', 'path', "delete", "tag"])
+    policy = gwPolicyNs.add_parser('config')
+    policy.add_argument('--name', required=True,
+                        help="Name of the GW firewall Policy ")
+    policy.add_argument('--category', required=False,
+                        default='LocalGatewayRules',
+                        choices=['LocalGatewayRules',],
+                        help="Policy Category, default is LocalGatewayRules")
+    policy.add_argument('--stateless', required=False,
+                        action='store_true',
+                        help="All L3 policies are stateless by default, set stateless to change")
+    policy.add_argument('--tcpstrict', required=False,
+                        action='store_true',
+                        help="Set if require strict TCP handshake for stateful policies")
+    policy.add_argument('--sequence', required=False, default=None,type=int,
+                        help="Sequence number")
+
+    policy.add_argument('--desc', required=False,
+                        default=None,
+                        help="Description of the Policy")
+
+    policy = gwPolicyNs.add_parser('stats')
+    policy.add_argument('--name', required=True,
+                        help="Name of the gateway policy")
+    policy.add_argument('--rule', required=False, default=None,
+                        help="Name of a rule in the policy")
+
+    position = gwPolicyNs.add_parser('position')
+    position.add_argument('--name', required=True,
+                          help="Name of the policy to reposition")
+    position.add_argument('--operation', required=True,
+                          default='insert_top',
+                          choices=['insert_top', 'insert_bottom',
+                                   'insert_before', 'insert_after'],
+                          help="Where to position.  Must specify anohter Policy as anchor if before/after")
+    position.add_argument('--anchor', default=None,
+                          required=False,
+                          help="Name of Policy for anchor if insert before or after")
+    position.add_argument('--anchordomain', default='default',
+                          required=False,
+                          help="Domain for the anchor.  default is 'default'")
+
         
     ruleSpace = subparsers.add_parser('rule')
     ruleSpace.add_argument('--domain', default='default')
     ruleSpace.add_argument('--policyname', required=True)
+    ruleSpace.add_argument('--pType', required=False, default='SecurityPolicy', help="Use SecurityPolicy for DFW, Use GatewayPolicy for Edge firewall")
     ruleNs = ruleSpace.add_subparsers(dest='rule', required=True)
     createCommonParsers(parser=ruleNs,
-                        names=["list", "find", "realization", "path", "delete", "tag"])
+                        names=["list", "find", "realization", "path", "tag"])
     rule = ruleNs.add_parser('config')
     rule.add_argument('--name', required=True,
                       help="Name of the rule")
@@ -1477,7 +1753,14 @@ def parseParameters():
     vm.add_argument('--tags', required=True,
                     nargs='*',
                     help="Tags in format of <scope:><tag>, use quoted empty to clear all tags")
-
+    vm = vmNs.add_parser('match')
+    vm.add_argument('--name', required=True)
+    vm.add_argument('--starts', action='store_true')
+    vm.add_argument('--ends', action='store_true')
+    vm.add_argument('--contains', action='store_true')
+    vm.add_argument('--ignorecase', action='store_true')
+    
+                    
     certSpace=subparsers.add_parser('cert')
     certNs = certSpace.add_subparsers(dest='cert', required=True)
     createCommonParsers(parser=certNs,
@@ -2253,7 +2536,29 @@ def parseParameters():
     upl.add_argument('--desc',
                      help="Description")
     
-                      
+
+    haprof = uplinkNs.add_parser('configTepHaProfile')
+    haprof.add_argument("--name", required=True,
+                        help="Name of the uplink profile")
+    haprof.add_argument("--desc", required=False,
+                        help="Description")
+    haprof.add_argument("--enabled", action='store_true',
+                        help="Set to enable, don't set to disable")
+    haprof.add_argument("--timeout", required=False, type=int,
+                        default=5,
+                        help="Failover wait time, range 0-60s, default 5")
+    haprof.add_argument("--recovery", action='store_true',
+                        help="Set to enable auto-recovery")
+    haprof.add_argument("--wait", required=False, type=int,
+                        default=300,
+                        help="Start time of auto recovery, range 300-3600s, default 300")
+    haprof.add_argument("--backoff", required=False, type=int, default=86400,
+                        help="Max backoff time for auto recovery, range 3600-86400s, default is 86400")
+    
+                        
+
+                        
+
     cmSpace = subparsers.add_parser('computeManager')
     cmNs = cmSpace.add_subparsers(dest='computeManager', required=True)
     createCommonParsers(parser=cmNs,
@@ -2272,6 +2577,9 @@ def parseParameters():
     cm.add_argument('--trust', required=False,
                     action='store_true',
                     help="Enable OIDC trust for VC7+")
+    cm.add_argument('--multi', required=False,
+                    action='store_true',
+                    help="Enable Multi NSX support")
     cm = cmNs.add_parser('listCluster')
     cm.add_argument('--vc', required=False,
                     help="Name of the vc")
@@ -2318,6 +2626,10 @@ def parseParameters():
     tnc = tncNs.add_parser('detach')
     tnc.add_argument("--name", required=True,
                      help="Name of the TNC to detatch TNP")
+    tnc = tncNs.add_parser('dfw')
+    tnc.add_argument("--name", required=True,
+                     help="Name of the cluster to enable DVPG security")
+
     vdsSpace = subparsers.add_parser('vds')
     vdsNs  = vdsSpace.add_subparsers(dest='vds', required=True)
     createCommonParsers(parser=vdsNs,
@@ -2402,6 +2714,178 @@ def parseParameters():
     fed = fedNs.add_parser('makeActive')
     fed.add_argument('--name', required=True,
                      help="Name of the Active Site")
+    
+    searchSpace = subparsers.add_parser('search')
+    searchNs = searchSpace.add_subparsers(dest='search', required=True)
+    search = searchNs.add_parser('lookup')
+    search.add_argument('--query', required=True,
+                        help="Query string")
+    search.add_argument('--mp', required=False, default=False,
+                        action='store_true',
+                        help="Default is policy search, enable for MP objects")
+
+    mirrorSpace = subparsers.add_parser('mirror')
+    mirrorNs = mirrorSpace.add_subparsers(dest='mirror', required=True)
+    createCommonParsers(parser=mirrorNs, names=['list', 'find', 'path'])
+    mirror = mirrorNs.add_parser('config')
+    mirror.add_argument("--name", required=True)
+    mirror.add_argument("--encap", required=False,
+                        choices=["GRE",
+                                 "ERSPAN_TWO",
+                                 "ERSPAN_THREE"],
+                        default="GRE",
+                        help="Remote span type")
+    mirror.add_argument("--direction",
+                        choices=["INGRESS",
+                                 "EGRESS",
+                                 "BIDIRECTIONAL"],
+                        default="BIDIRECTIONAL",
+                        help="Source mirror direction")
+    mirror.add_argument("--destination",
+                        required=True,
+                        help="Destination group")
+    mirror.add_argument("--stack",
+                        choices=["Default", "Mirror"],
+                        default="Default",
+                        help="Source host IP stack for remote mirror")
+    mirror.add_argument("--snap",
+                        required=False,
+                        type=int,
+                        metavar="60-65535")
+    mirror.add_argument("--spantype",
+                        choices=["REMOTE_L3_SPAN",
+                                 "LOGICAL_SPAN"],
+                        default="REMOTE_L3_SPAN")
+    mirror.add_argument("--erspan",
+                        type=int,
+                        default=0,
+                        metavar="0-1023",
+                        help="ERSPAN ID when using erspan, default 0")
+    mirror.add_argument("--grekey",
+                        type=int,
+                        default=0,
+                        help="32-bit key for GRE, default 0")
+    mirror.add_argument("--desc",
+                        help="Description string")
+    mirror = mirrorNs.add_parser('listMp')
+                        
+    
+    centralSpace = subparsers.add_parser('central')
+    centralNs = centralSpace.add_subparsers(dest='central', required=True)
+    createCommonParsers(parser=centralNs, names=['list'])
+    centralNtpSpace = centralNs.add_parser('ntp')
+    centralNtpNs = centralNtpSpace.add_subparsers(dest='centralntp', required=True)
+    cntp = centralNtpNs.add_parser('clear')
+    cntp = centralNtpNs.add_parser('config')
+    cntp.add_argument('--servers', nargs="*", required=True,
+                       help="List of NTP servers")
+    cntp.add_argument('--tz', required=False,
+                      default=None,
+                      help="Timzeone string")
+
+    centralSyslogSpace=centralNs.add_parser('syslog')
+    centralSyslogNs = centralSyslogSpace.add_subparsers(dest='centralsyslog', required=True)
+    csyslog = centralSyslogNs.add_parser('add')
+    csyslog.add_argument('--server', required=True,
+                         help="Name or IP of server")
+    csyslog.add_argument('--protocol', required=False,
+                         default='UDP', choices=['UDP', 'TCP', 'LI'],
+                         help="syslog protocol, default is UDP")
+    csyslog.add_argument('--port', required=False, type=int,
+                         default=514,
+                         help="Syslog port, default is 514")
+    csyslog.add_argument('--level', required=False, default="INFO",
+                         choices=["EMERG", "ALERT", "CRIT", "ERR",
+                                  "WARNING", "NOTICE", "INFO", "DEBUG"],
+                         help="Log level, default is INFO")
+    csyslog = centralSyslogNs.add_parser('update')
+    csyslog.add_argument('--server', required=True,
+                         help="Name or IP of server")
+    csyslog.add_argument('--protocol', required=False,
+                         default='UDP', choices=['UDP', 'TCP', 'LI'],
+                         help="syslog protocol, default is UDP")
+    csyslog.add_argument('--port', required=False, type=int,
+                         default=514,
+                         help="Syslog port, default is 514")
+    csyslog.add_argument('--level', required=False, default="INFO",
+                         choices=["EMERG", "ALERT", "CRIT", "ERR",
+                                  "WARNING", "NOTICE", "INFO", "DEBUG"],
+                         help="Log level, default is INFO")
+    csyslog = centralSyslogNs.add_parser('remove')
+    csyslog.add_argument('--server', required=True,
+                         help="Name or IP of server")
+                                 
+    alarmSpace = subparsers.add_parser('alarms')
+    alarmNs = alarmSpace.add_subparsers(dest='alarms', required=True)
+    createCommonParsers(parser=alarmNs, names=['list'])
+    alarm = alarmNs.add_parser('get')
+    alarm.add_argument('--status', required=False,
+                       choices=['OPEN', 'ACKNOWLEDGED', 'SUPPRESSED', 'RESOLVED'],
+                       default='OPEN')
+    
+    nappSpace = subparsers.add_parser('napp')
+    nappNs = nappSpace.add_subparsers(dest='napp', required=True)
+    nappHealth = nappNs.add_parser('health')
+    metricSpace = nappNs.add_parser('metrics')
+    metricsNs = metricSpace.add_subparsers(dest='metrics', required=True)
+    rtypes = metricsNs.add_parser('rtypes')
+
+    
+    keys = metricsNs.add_parser('keys')
+    keys.add_argument('--type', required=True,
+                      help="Resource types, use invalid value to list possible types")
+
+    hostMetric = metricsNs.add_parser('host')
+    hostMetric.add_argument("--nodes", required=True, nargs="*",
+                            help="List of host TN names")
+    hostMetric.add_argument("--keys", required=True, nargs="*",
+                            help="List of metric keys")
+    hostMetric.add_argument("-g", "--granularity", required=False,
+                            default="m", choices=["m", "h", "d"],
+                            help="Granulariy: m - 5 minutes, h - hourly, d - daily")
+    hostMetric.add_argument("--ctime", action='store_true',
+                            help="Display epoch timestamps with conversion")
+    
+    metricEdge = metricsNs.add_parser('edge')
+    metricEdge.add_argument("--nodes", required=True, nargs="*",
+                            help="List of edge names")
+    metricEdge.add_argument("--keys", required=True, nargs="*",
+                            help="List of metric keys")
+    metricEdge.add_argument("-g", "--granularity", required=False,
+                            default="m", choices=["m", "h", "d"],
+                            help="Granulariy: m - 5 minutes, h - hourly, d - daily")
+    metricEdge.add_argument("--ctime", action='store_true',
+                            help="Display epoch timestamps with conversion")
+    
+    
+    metricUa = metricsNs.add_parser('mgr')
+    metricUa.add_argument("--nodes", required=True, nargs="*",
+                          help="List of Manager node names")
+    metricUa.add_argument("--keys", required=True, nargs="*",
+                          help="List of metric keys")
+    metricUa.add_argument("-g", "--granularity", required=False,
+                          default="m", choices=["m", "h", "d"],
+                          help="Granulariy: m - 5 minutes, h - hourly, d - daily")
+    metricUa.add_argument("--ctime", action='store_true',
+                          help="Display epoch timestamps with conversion")
+
+    metricGen = metricsNs.add_parser('gen')
+    metricGen.add_argument("--rtype", required=True)
+    metricGen.add_argument("--nodes", nargs="*", required=False)
+    metricGen.add_argument("--keys", required=True, nargs="*")
+    metricGen.add_argument("-g", "--granularity", required=False,
+                          default="m", choices=["m", "h", "d"],
+                          help="Granulariy: m - 5 minutes, h - hourly, d - daily")
+    metricGen.add_argument("--ctime", action='store_true',
+                          help="Display epoch timestamps with conversion")
+    
+    
+    idsSpace = subparsers.add_parser('ids')
+    idsNs = idsSpace.add_subparsers(dest='ids', required=True)
+    createCommonParsers(parser=idsNs, names=['list'])
+
+    idsRuleSpace = idsNs.add_parser('idsrule')
+    idsRuleNs = idsRuleSpace.add_subparsers(dest='idsrule', required=True)
     
     
     # Parse all the argumentes, and ask for password if
@@ -2617,8 +3101,10 @@ def createNsxObject(objName, mp, args):
         return nsxobjects.Service(mp=mp)
     elif objName=='policy':
         return nsxobjects.SecurityPolicy(mp=mp, domain=args.domain)
+    elif objName=='gatewayPolicy':
+        return nsxobjects.GatewayPolicy(mp=mp, domain=args.domain)
     elif objName=="rule":
-        return nsxobjects.Rule(mp=mp, policy=args.policyname, domain=args.domain)
+        return nsxobjects.Rule(mp=mp, policy=args.policyname, pType=args.pType, domain=args.domain)
     elif objName=='vm':
         return nsxobjects.VirtualMachine(mp=mp)
     elif objName=='lb':
@@ -2661,6 +3147,24 @@ def createNsxObject(objName, mp, args):
         return nsxobjects.Syslog(mp=mp)
     elif objName=='pimProfile':
         return nsxobjects.PimProfile(mp=mp)
+    elif objName=="search":
+        return nsxobjects.Search(mp=mp)
+    elif objName=="mirror":
+        return nsxobjects.Mirror(mp=mp)
+    elif objName=='edgeBridgeProfile':
+        return nsxobjects.EdgeBridgeProfile(mp=mp)
+    elif objName=='tzprofile':
+        return nsxobjects.TransportZoneProfile(mp=mp)
+    elif objName=='central':
+        return nsxobjects.CentralConfig(mp=mp)
+    elif objName=='alarms':
+        return nsxobjects.Alarms(mp=mp)
+
+    elif objName=='napp':
+        return nsxobjects.NappMetric(mp=mp)
+    elif objName=='ids':
+        return nsxobjects.DistributedIDS(mp=mp)
+    
     '''
     elif objName=='':
         return nsxobjects.(mp=mp)
@@ -2681,7 +3185,9 @@ def main():
                               site=args.policysite,
                               enforcement=args.enforcement,
                               domain=args.region,
-                              timeout=args.sessiontimeout)
+                              timeout=args.sessiontimeout,
+                              org=args.org,
+                              project=args.project)
 
     if not args.ns:
         print(args)
@@ -2743,6 +3249,8 @@ def main():
                             oldpassword=args.oldpasswd,
                             newpassword=args.newpasswd,
                             node=args.node)
+        elif argsNs['cluster'] == 'ssh':
+            obj.startstop_ssh(action=args.action, name=args.node)
         elif argsNs['cluster'] == 'vip':
             if argsNs['clustervip'] == 'get':
                 obj.getClusterIp()
@@ -2812,11 +3320,27 @@ def main():
                            rootpw=args.rootpw, clipw=args.clipw,
                            auditpw=args.auditpw, vc=args.vc,
                            cluster=args.cluster, storage=args.storage,
+                           host=args.host,
                            fpe0=args.fpe0, fpe1=args.fpe1, fpe2=args.fpe2,
+                           fpe3=args.fpe3,
                            mgmtNet=args.mgmtNet, gateway=args.gateway,
                            mgmtIp=args.mgmtIp, mgmtMask=args.mgmtMask,
+                           mgmtIp6=args.mgmtIp6, mgmtMask6=args.mgmtMask6,
                            uplink=args.uplinkprofile, ippool=args.ippool,
-                           nics=args.nics, ntype=args.ntype)
+                           nics=args.nics, ntype=args.ntype,
+                           uplink2=args.uplinkprofile2,
+                           ippool2=args.ippool2,
+                           nics2=args.nics2,
+                           tznames2=args.tz2)
+            
+
+        elif argsNs['edge'] == 'redeploy':
+            obj.redeploy(name=args.name, remHost=args.removeHost)
+        elif argsNs['edge'] == 'getRingSize':
+            obj.getRingSize(name=args.name)
+        elif argsNs['edge'] == 'setRingSize':
+            obj.setRingSize(name=args.name, rx=args.rx,
+                            tx=args.tx, ringsize=args.size)
         elif argsNs['edge'] == 'state':
             obj.getState(name=args.name)
         elif argsNs['edge'] == 'teps':
@@ -2830,7 +3354,19 @@ def main():
                 obj.getInterSiteBgpSummary(name=args.name)
             elif argsNs['inter-site'] == 'stats':
                 obj.getInterSiteStats(name=args.name)
-                
+        elif argsNs['edge'] == 'dataplane':
+            obj.updateDataplane(name=args.name, action=argsNs['edgedp'])
+        elif argsNs['edge'] == 'ssh':
+            obj.updateSsh(name=args.name, action=argsNs['edgessh'])
+        elif argsNs['edge'] == 'fc':
+            if argsNs['edgefc'] == 'get':
+                obj.getFlowCache(name=args.name)
+            elif argsNs['edgefc'] == 'set':
+                if args.enable:
+                    obj.setFlowCache(name=args.name, action=True)
+                elif args.disable:
+                    obj.setFlowCache(name=args.name, action=False)
+                    
             
     elif args.ns == 'edgecluster':
         if argsNs['edgecluster'] == 'details':
@@ -2883,10 +3419,12 @@ def main():
                        uplinkprofile=args.uplinkprofile,
                        pnics=args.pnics,
                        uplinknames=args.uplinknames,
+                       dvsUplinks=args.dvsUplinks,
                        hswname=args.hswname,
                        tz=args.tz,
                        vds=args.vds,
                        lldp=args.lldp,
+                       ha=args.ha,
                        vmks=args.vmks,
                        vmknets=args.vmknets,
                        vmkuninstall=args.vmkuninstall,
@@ -2904,17 +3442,24 @@ def main():
     elif args.ns == 'tncollection':
         if argsNs['tncollection'] == 'detach':
             obj.detachTnp(name=args.name)
+        elif argsNs['tncollection'] == 'dfw':
+            obj.updateForDfw(name=args.name, enable=True)
         '''
         '''
     elif args.ns == 'pimProfile':
         if argsNs['pimProfile'] == 'config':
             obj.config(name=args.name, bsm=args.bsm, rps=args.rpmap, desc=args.desc)
+
+    elif args.ns == 'edgeBridgeProfile':
+        if argsNs['edgeBridgeProfile'] == 'config':
+            obj.config(name=args.name, pEdge=args.pEdge,  sEdge=args.sEdge, failover_mode=args.failover_mode)
             
     elif args.ns == 'tier0':
         if argsNs['tier0'] == 'config':
             obj.config(name=args.name, failover=args.failover,
                        ha=args.ha, transit=args.transit,
-                       dhcprelay=args.dhcprelay, desc=args.desc)
+                       enableStatefulSvc=args.enableStateful, redirPolicy=args.redirPolicy,
+                       dhcprelay=args.dhcprelay, disableFw=args.disableFw,desc=args.desc)
         elif argsNs['tier0'] == 'routes':
             obj.getRouteTable(name=args.name, rtype='routing-table')
         elif argsNs['tier0'] == 'fib':
@@ -2958,6 +3503,32 @@ def main():
             elif argsNs['t0intNs'] == 'entities':
                 i = obj.getInterfaces(name=args.name, interface=args.int,
                                       locale=args.locale, display=False)
+                if i:
+                    obj.getRealizationEntities(path=i['path'], display=True)
+        
+        elif argsNs['tier0'] == 'interfaceGroup':
+            if argsNs['t0intGrpNs'] == 'get':
+                obj.getInterfaceGroups(name=args.name, locale=args.locale,
+                                        interfaceGrp=args.intGrp, display=True)
+            
+            elif argsNs['t0intGrpNs'] == 'config':
+                obj.createInterfaceGroup(name=args.name, interfaceGrp=args.intGrp,
+                                         interfaces=args.members, snatPools=args.snatPools,
+                                         locale=args.locale)
+
+            elif argsNs['t0intGrpNs'] == 'delete':
+                obj.deleteInterfaceGroup(name=args.name, interfaceGrp=args.intGrp,
+                                         locale=args.locale, display=True)
+
+            elif argsNs['t0intGrpNs'] == 'status':
+                i = obj.getInterfaceGroups(name=args.name, interfaceGrp=args.intGrp,
+                                           locale=args.locale, display=False)
+                if i:
+                    obj.getRealizationStatus(path=i['path'], display=True)
+        
+            elif argsNs['t0intGrpNs'] == 'entities':
+                i = obj.getInterfaceGroups(name=args.name, interfaceGrp=args.intGrp,
+                                           locale=args.locale, display=False)
                 if i:
                     obj.getRealizationEntities(path=i['path'], display=True)
 
@@ -3062,7 +3633,8 @@ def main():
     elif args.ns == 'tier1':
         if argsNs['tier1'] == 'config':
             obj.config(name=args.name, preempt=args.preempt, tier0=args.tier0,
-                       standby_relocate=args.standby_relocate,
+                       standby_relocate=args.standby_relocate, ha=args.ha,
+                       disableFw=args.disableFw,
                        advertisements=args.advertisements, dhcprelay=args.dhcprelay)
         elif argsNs['tier1'] == 'pim':
             obj.setMulticast(name=args.t1, enable=args.enable, log=args.log,
@@ -3089,6 +3661,27 @@ def main():
                 obj.configInterface(tier1=args.t1, intName=args.name,
                                     segment=args.segment,
                                     addrs=args.ip, mask=args.mask)
+        elif argsNs['tier1'] == 'interfaceGroup':
+            if argsNs['t1intGrpNs'] == 'get':
+                obj.getInterfaceGroups(name=args.name, locale=args.locale,
+                                        interfaceGrp=args.intGrp, display=True)
+            elif argsNs['t1intGrpNs'] == 'config':
+                obj.createInterfaceGroup(name=args.name, interfaceGrp=args.intGrp,
+                                         interfaces=args.members, snatPools=args.snatPools,
+                                         locale=args.locale)
+            elif argsNs['t1intGrpNs'] == 'delete':
+                obj.deleteInterfaceGroup(name=args.name, interfaceGrp=args.intGrp,
+                                         locale=args.locale, display=True)
+            elif argsNs['t1intGrpNs'] == 'status':
+                i = obj.getInterfaceGroups(name=args.name, interfaceGrp=args.intGrp,
+                                           locale=args.locale, display=False)
+                if i:
+                    obj.getRealizationStatus(path=i['path'], display=True)
+            elif argsNs['t1intGrpNs'] == 'entities':
+                i = obj.getInterfaceGroups(name=args.name, interfaceGrp=args.intGrp,
+                                           locale=args.locale, display=False)
+                if i:
+                    obj.getRealizationEntities(path=i['path'], display=True)
         elif argsNs['tier1'] == 'nat':
             if argsNs['t1natns'] == 'list':
                 obj.listTier1NatRules(t1=args.t1, natid=args.natid, display=True)
@@ -3138,6 +3731,15 @@ def main():
                        connect=args.connect,
                        vni=args.vni,
                        desc=args.desc)
+        elif argsNs['segment'] == 'setEdgeBridgeProfile':
+            obj.setEdgeBridgeProfile(name=args.name, tz=args.tz,
+                                     bProfile=args.bProfile, vlans=args.vlans)
+        elif argsNs['segment'] == 'deleteEdgeBridgeProfile':
+            obj.deleteEdgeBridgeProfile(name=args.name, bProfile=args.bProfile)
+        elif argsNs['segment'] == 'getBridgeStats':
+            obj.getBridgeStats(name=args.name, bProfile=args.bProfile)
+        elif argsNs['segment'] == 'getBridgePortUUID':
+            obj.getBridgePortUUID(name=args.name, bProfile=args.bProfile)
         elif argsNs['segment'] == 'tagSegment':
             obj.tagSegment(segmentName=args.name, tags=args.tags,
                            replace=args.replace,
@@ -3154,6 +3756,7 @@ def main():
             if argsNs['port'] == 'config':
                 obj.config(name=args.portname,
                            vif=args.vif,
+                           unblocked=args.unblocked,
                            tagspec=args.tags)
 
 
@@ -3179,18 +3782,25 @@ def main():
 
     elif args.ns == 'tz':
         if argsNs['tz'] == 'config':
-            obj.config(name=args.name,
-                       desc=args.desc,
-                       teaming=args.teaming,
-                       hswname=args.hswname,
-                       isdefault=args.isdefault,
-                       transportType=args.type)
+            obj.configPolicy(name=args.name,
+                             tztype=args.tztype,
+                             desc=args.desc,
+                             teaming=args.teaming,
+                             isdefault=args.isdefault,
+                             nested=args.nested,
+                             tzprofiles=args.tzprofiles)
         elif argsNs['tz'] == 'nested':
             obj.setNested(name=args.name,
                           enable=args.enable,
                           disable=args.disable)
             
+        '''
+        '''
 
+    elif args.ns == 'tzprofile':
+        if argsNs['tzprofile'] == 'config':
+            obj.config(name=args.name, latency=args.latency,
+                       interval=args.interval, desc=args.desc)
         '''
         '''
 
@@ -3258,11 +3868,10 @@ def main():
                        vms=args.vm,
                        ipaddrs=args.ip,
                        macaddrs=args.mac,
-                       ports=args.ports,
                        segments=args.segments,
                        vifs=args.vif,
                        groups=args.nsgroups,
-                       tags=args.tags)
+                       hosts=args.hosts)
         elif argsNs['group'] == 'members':
             obj.getVmMembers(name=args.name)
         elif argsNs['group'] == 'ipaddrs':
@@ -3291,7 +3900,27 @@ def main():
             obj.getStats(name=args.name, rule=args.rule)
         elif argsNs['policy'] == 'delete':
             obj.delete(name=args.name)
-            
+         
+    elif args.ns == 'gatewayPolicy':
+        if argsNs['gatewayPolicy'] == 'config':
+            obj.config(name=args.name,
+                       domain=args.domain,
+                       category=args.category,
+                       stateless=args.stateless,
+                       tcpstrict=args.tcpstrict,
+                       sequence=args.sequence,
+                       desc=args.desc)
+        elif argsNs['gatewayPolicy'] == 'position':
+            obj.position(name=args.name, domain=args.domain,
+                         anchor=args.anchor,
+                         anchordomain=args.anchordomain,
+                         operation=args.operation)
+        elif argsNs['gatewayPolicy'] == 'stats':
+            obj.getStats(name=args.name, rule=args.rule)
+        elif argsNs['gatewayPolicy'] == 'delete':
+            obj.delete(name=args.name)
+
+   
     elif args.ns == 'rule':
         if argsNs['rule'] == 'config':
             obj.config(name=args.name, action=args.action,
@@ -3315,6 +3944,10 @@ def main():
     elif args.ns == 'vm':
         if argsNs['vm'] == 'tagvm':
             obj.tag(vmname=args.vmname, tags=args.tags, replace=args.replace)
+        elif argsNs['vm'] == 'match':
+            obj.match(name=args.name, starts=args.starts, ends=args.ends,
+                      contains=args.contains, ignorecase=args.ignorecase,
+                      display=True)
     elif args.ns == 'lb':
         if argsNs['lb'] == 'config':
             obj.config(name=args.name, size=args.size, tier1=args.tier1,
@@ -3383,7 +4016,7 @@ def main():
                                  interval=args.interval,
                                  timeout=args.timeout,
                                  port=args.port)
-            elif argsNs['monitor'] == 'configICMP':
+            elif argsNs['monitor'] == 'configIcmp':
                 obj.configIcmp(name=args.name, desc=args.desc,
                                  datalen=args.datalen,
                                  fallCount=args.fallCount,
@@ -3564,10 +4197,16 @@ def main():
                                               desc=args.desc)
         elif argsNs['uplink'] == 'configLldpProfile':
             obj.configLldpProfile(name=args.name, lldp=args.send)
+        elif argsNs['uplink'] == 'configTepHaProfile':
+            obj.configTepHAProfile(name=args.name, recovery=args.recovery,
+                                   wait=args.wait, backoff=args.backoff,
+                                   enabled=args.enabled, timeout=args.timeout,
+                                   desc=args.desc)
+            
     elif args.ns == 'computeManager':
         if argsNs['computeManager'] == 'config':
             obj.register(svrName=args.name, server=args.server,
-                         username=args.username, password=args.passwd,
+                         username=args.username, password=args.passwd, multi=args.multi,
                          thumbprint=args.thumbprint, trust=args.trust)
         elif argsNs['computeManager'] == 'listCluster':
             obj.listClusters(vc=args.vc)
@@ -3655,9 +4294,72 @@ def main():
             obj.status()
         elif argsNs['syslog'] == 'serviceCtl':
             obj.serviceCtl(action=args.action)
-        
+    elif args.ns == 'search':
+        if argsNs['search'] == 'lookup':
+            obj.query(query=args.query, mp=args.mp)
             
-    
-            
+    elif args.ns == 'mirror':
+        if argsNs['mirror'] == 'listMp':
+            obj.listMp()
+        elif argsNs['mirror'] == 'config':
+            obj.createProfile(name=args.name, encap=args.encap,
+                              direction=args.direction,
+                              destination=args.destination,
+                              stack=args.stack,
+                              snap=args.snap,
+                              spantype=args.spantype,
+                              erspanId=args.erspan,
+                              grekey=args.grekey,
+                              desc=args.desc)
+
+    elif args.ns == 'central':
+        if argsNs['central'] == 'ntp':
+            if argsNs['centralntp'] == 'clear':
+                obj.setupNtp(servers=None)
+            else:
+                obj.setupNtp(servers=args.servers, tz=args.tz)
+        elif argsNs['central'] == 'syslog':
+            if argsNs['centralsyslog'] == 'update':
+                obj.setupSyslog(action='update', server=args.server,
+                                protocol=args.protocol, port=args.port,
+                                level=args.level)
+            elif argsNs['centralsyslog'] == 'add':
+                obj.setupSyslog(action='add', server=args.server,
+                                protocol=args.protocol, port=args.port,
+                                level=args.level)
+            elif argsNs['centralsyslog'] == 'remove':
+                obj.setupSyslog(action='remove',server=args.server)
+                
+    elif args.ns == 'alarms':
+        if argsNs['alarms'] == 'get':
+            obj.getAlarms(status=args.status)
+    elif args.ns == 'napp':
+        if argsNs['napp'] == 'metrics':
+            if argsNs['metrics'] == 'keys':
+                obj.getKeys(resourceType=args.type)
+            elif argsNs['metrics'] == 'rtypes':
+                obj.getResourceTypes(display=True)
+            elif argsNs['metrics'] == 'host':
+                obj.getNappMetric(rtype="hosttransportnode",
+                                   nodes=args.nodes, keys=args.keys,
+                                   gran=args.granularity, ctime=args.ctime)
+            elif argsNs['metrics'] == 'edge':
+                obj.getNappMetric(rtype="policyedgenode",
+                                  nodes=args.nodes, keys=args.keys,
+                                  gran=args.granularity, ctime=args.ctime)
+            elif argsNs['metrics'] == 'mgr':
+                obj.getNappMetric(rtype="clusternode",
+                                  nodes=args.nodes, keys=args.keys,
+                                  gran=args.granularity, ctime=args.ctime)
+            elif argsNs['metrics'] == 'gen':
+                obj.getNappMetric(rtype=args.rtype,
+                                  nodes=args.nodes,
+                                  keys=args.keys,
+                                  gran=args.granularity,
+                                  ctime=args.ctime)
+        elif argsNs['napp'] == 'health':
+            obj.getHealth()
+                
+
 if __name__=="__main__":
     main()

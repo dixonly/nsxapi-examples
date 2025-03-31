@@ -12,9 +12,9 @@ class NsxConnect(requests.Request):
     def __init__(self, server, port = 443,
                  user='admin', password=None, access_token=None, cookie=None, 
                  content='application/json', accept='application/json',
-                 global_infra=False, global_gm=False,
+                 global_infra=False, global_gm=False, org='default',
                  site='default', enforcement='default', domain='default',
-                 cert=None, verify=False, timeout=None):
+                 cert=None, verify=False, timeout=None, project=None, isNsx=True):
         '''
         server - The NSX Manager IP or FQDN
         port - TCP port for server
@@ -44,6 +44,9 @@ class NsxConnect(requests.Request):
         self.site=site
         self.enforcement=enforcement
         self.domain=domain
+        self.org=org
+        self.project=project
+        
 
         self.session = requests.Session()
         
@@ -80,9 +83,18 @@ class NsxConnect(requests.Request):
         if 'auth' in self.requestAttr:
             if '@!!!' in self.username:
                 self.requestAttr.pop('auth')
-                self.requestAttr['headers']['Authorization'] = 'Remote %s' % base64.b64encode('%s:%s' %(self.username, self.password))
+                creds = "%s:%s" %(self.username, self.password)
+                creds = creds.encode()
+                self.requestAttr['headers']['Authorization'] = 'Remote %s' % base64.b64encode(creds)
+        if isNsx:
+            self.version = self.getVersion()
 
-
+    def getVersion(self):
+        # for API compatibility purposes, only get major and minor
+        v = self.get(api='/api/v1/node/version', verbose=False, codes=[200])
+        versionStr = v['product_version'].split('.')
+        version=int("%s%s" % (versionStr[0],versionStr[1]))
+        return version
 
     def getGlobalInfra(self):
         return self.global_infra
@@ -119,6 +131,17 @@ class NsxConnect(requests.Request):
             elif api.startswith('/api/v1')  and self.global_gm:
                 newApi = api.replace('/api/v1', '/global-manager/api/v1')
 
+        if self.project:
+            if 'search/query' in api:
+                pass
+            elif api.startswith('/policy/api/v1'):
+                newApi = newApi.replace("/policy/api/v1",
+                                        "/policy/api/v1/orgs/%s/projects/%s" %(self.org,
+                                                                               self.project))
+            elif api.startswith('/global-manager/api/v1'):
+                newApi=newApi.replace("/global-manager/api/v1",
+                                      "/global-manager/api/v1/orgs/%s/projects/%s" %(self.org,
+                                                                                     self.project))
         return newApi
             
     def jsonPrint(self, data, header=None, indent=4, brief=False):
@@ -282,10 +305,8 @@ class NsxConnect(requests.Request):
                 NSX
         codes - List of HTTP request status codes for success
         '''
-        print(api)
         api=self.normalizeGmLmApi(api)
         url = self.server+api
-        print(url)
         if verbose:
             print("API: POST %s with data" %url)
             print(json.dumps(data, indent=4)) 
