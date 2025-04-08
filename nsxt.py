@@ -1562,7 +1562,7 @@ def parseParameters():
     serviceSpace = subparsers.add_parser('service')
     serviceNs = serviceSpace.add_subparsers(dest='service', required=True)
     createCommonParsers(parser=serviceNs,
-                        names=['list', 'find', 'realization', 'path', "delete"])
+                        names=['list', 'find', 'realization', 'path', "delete", "tag"])
     svc = serviceNs.add_parser('config')
     svc.add_argument('--name', required=True)
     svc.add_argument('--desc', required=False,
