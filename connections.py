@@ -91,6 +91,8 @@ class NsxConnect(requests.Request):
 
     def getVersion(self):
         # for API compatibility purposes, only get major and minor
+        if self.global_gm:
+            return 0
         v = self.get(api='/api/v1/node/version', verbose=False, codes=[200])
         versionStr = v['product_version'].split('.')
         version=int("%s%s" % (versionStr[0],versionStr[1]))
